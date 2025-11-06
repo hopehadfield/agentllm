@@ -309,38 +309,13 @@ class ReleaseManager:
         prompt = self._build_prompt_message(user_id)
         return self._create_simple_response(prompt)
 
-    # def run(self, message: str, user_id: Optional[str] = None, **kwargs) -> Any:
-    #     """Run the agent with configuration management.
+    def run(self, message: str, user_id: Optional[str] = None, **kwargs) -> Any:
+        """Run the agent with configuration management.
 
-    #     Flow:
-    #     1. Check if user is configured
-    #     2. If not configured, handle configuration (extract tokens or prompt)
-    #     3. If configured, create agent (if needed) and run it
-
-    #     Args:
-    #         message: User message
-    #         user_id: User identifier from OpenWebUI
-    #         **kwargs: Additional arguments to pass to wrapped agent
-
-    #     Returns:
-    #         RunResponse from agent or configuration prompt
-    #     """
-    #     # Check configuration and handle if needed
-    #     config_response = self._handle_configuration(message, user_id)
-
-    #     # If config_response is not None, user needs to configure
-    #     if config_response is not None:
-    #         return config_response
-
-    #     # User is configured, get/create agent and run it
-    #     agent = self._get_or_create_agent()
-    #     return agent.run(message, user_id=user_id, **kwargs)
-
-    async def arun(self, message: str, user_id: Optional[str] = None, **kwargs):
-        """Async version of run() with same configuration management logic.
-
-        Handles both streaming and non-streaming modes. When streaming is enabled
-        and user needs configuration, yields a single chunk with the config message.
+        Flow:
+        1. Check if user is configured
+        2. If not configured, handle configuration (extract tokens or prompt)
+        3. If configured, create agent (if needed) and run it
 
         Args:
             message: User message
@@ -348,36 +323,70 @@ class ReleaseManager:
             **kwargs: Additional arguments to pass to wrapped agent
 
         Returns:
-            RunResponse from agent, configuration prompt, or async iterator (if streaming)
+            RunResponse from agent or configuration prompt
         """
-        # Check if streaming mode
-        stream = kwargs.get("stream", False)
-
-        # TEMPORARY: Skip config check to test agent pass-through
         # Check configuration and handle if needed
-        # config_response = self._handle_configuration(message, user_id)
-        config_response = None  # TEMPORARY: Always return None
+        config_response = self._handle_configuration(message, user_id)
 
         # If config_response is not None, user needs to configure
         if config_response is not None:
-            if stream:
-                # In streaming mode, we need to yield the config response as chunks
-                async def config_stream():
-                    content = (
-                        config_response.content
-                        if hasattr(config_response, "content")
-                        else str(config_response)
-                    )
-                    yield content
-
-                return config_stream()
-            else:
-                # Non-streaming mode, return the response directly
-                return config_response
+            return config_response
 
         # User is configured, get/create agent and run it
         agent = self._get_or_create_agent()
+        return agent.run(message, user_id=user_id, **kwargs)
 
-        # Return the agent's arun result directly - it handles streaming internally
-        # Don't await here - just pass through what the agent returns
-        return agent.arun(message, user_id=user_id, **kwargs)
+    async def _arun_non_streaming(self, message: str, user_id: Optional[str] = None, **kwargs):
+        """Internal async method for non-streaming mode."""
+        # Check configuration and handle if needed
+        config_response = self._handle_configuration(message, user_id)
+
+        if config_response is not None:
+            return config_response
+
+        agent = self._get_or_create_agent()
+        return await agent.arun(message, user_id=user_id, **kwargs)
+
+    async def _arun_streaming(self, message: str, user_id: Optional[str] = None, **kwargs):
+        """Internal async generator for streaming mode."""
+        # Check configuration and handle if needed
+        config_response = self._handle_configuration(message, user_id)
+
+        if config_response is not None:
+            content = (
+                config_response.content
+                if hasattr(config_response, "content")
+                else str(config_response)
+            )
+            yield content
+            return
+
+        agent = self._get_or_create_agent()
+
+        # When streaming, agent.arun() returns an async generator directly
+        # Don't await it, just iterate over it
+        async for chunk in agent.arun(message, user_id=user_id, **kwargs):
+            yield chunk
+
+    def arun(self, message: str, user_id: Optional[str] = None, **kwargs):
+        """Async version of run() with same configuration management logic.
+
+        Handles both streaming and non-streaming modes. Returns either a coroutine
+        (non-streaming) or an async generator (streaming) based on the stream parameter.
+
+        Args:
+            message: User message
+            user_id: User identifier from OpenWebUI
+            **kwargs: Additional arguments to pass to wrapped agent
+
+        Returns:
+            Coroutine (non-streaming) or AsyncGenerator (streaming)
+        """
+        stream = kwargs.get("stream", False)
+
+        if stream:
+            # Return async generator for streaming
+            return self._arun_streaming(message, user_id=user_id, **kwargs)
+        else:
+            # Return coroutine for non-streaming
+            return self._arun_non_streaming(message, user_id=user_id, **kwargs)
