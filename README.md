@@ -23,7 +23,7 @@ This project implements a LiteLLM custom provider for Agno agents, allowing you 
 
 - Python 3.11+
 - [uv](https://docs.astral.sh/uv/) package manager
-- API keys for LLM providers (OpenAI, Anthropic, Groq, etc.)
+- Google Gemini API key (get from [Google AI Studio](https://aistudio.google.com/apikey))
 
 ## Installation
 
@@ -41,7 +41,7 @@ uv sync
 3. Configure environment variables:
 ```bash
 cp .env.example .env
-# Edit .env and add your API keys
+# Edit .env and add your GEMINI_API_KEY
 ```
 
 ## Project Structure
@@ -103,11 +103,18 @@ curl -X POST http://localhost:8890/v1/chat/completions \
 
 ### Available Models
 
-The following Agno agents are available:
-
+**Agno Agents** (powered by Gemini 2.0 Flash):
 - `agno/echo` - Simple echo agent for testing
 - `agno/assistant` - General-purpose helpful assistant
 - `agno/code-helper` - Coding assistant for programming tasks
+
+**Direct Gemini Models:**
+- `gemini-2.5-flash` - Latest, fastest Gemini model
+- `gemini-2.0-flash` - Stable, efficient model (used by Agno agents)
+- `gemini-1.5-pro` - Most capable Gemini model
+- `gemini-1.5-flash` - Fast and efficient
+
+> **Note:** All models require a single `GEMINI_API_KEY` in your `.env` file. Get your API key from [Google AI Studio](https://aistudio.google.com/apikey).
 
 ## How It Works
 
@@ -177,9 +184,9 @@ AGENT_REGISTRY["my-agent"] = create_my_agent
 
 ### Quick Start
 
-**Prerequisites**: Make sure you have your OpenAI API key configured (the agents use GPT-4o-mini):
+**Prerequisites**: Make sure you have your Gemini API key configured (all agents and models use Gemini):
 ```bash
-export OPENAI_API_KEY="your-openai-api-key-here"
+export GEMINI_API_KEY="your-gemini-api-key-here"
 ```
 
 1. **Start the LiteLLM proxy** (in one terminal):
@@ -223,15 +230,22 @@ docker compose down
 
 ### Environment Variables
 
-See `.env.example` for all configuration options.
+See `.env.example` for all configuration options. Key variables include:
+
+- **GEMINI_API_KEY** - Required for all models (Agno agents and direct Gemini models). Get from [Google AI Studio](https://aistudio.google.com/apikey)
+- **LITELLM_MASTER_KEY** - API key for accessing the LiteLLM proxy (default: `sk-agno-test-key-12345`)
 
 ### Proxy Configuration
 
 Edit `src/agentllm/proxy_config.yaml` to:
-- Add/remove agent models
+- Add/remove agent models (Agno agents, Gemini, or other LLM providers)
 - Change authentication settings
 - Configure logging
 - Adjust server settings
+
+The proxy already includes configurations for:
+- **Agno agents** (custom agents with specialized behaviors)
+- **Google Gemini models** (gemini-2.5-flash, gemini-2.0-flash, gemini-1.5-pro, gemini-1.5-flash)
 
 ## Provider Implementation
 
@@ -279,7 +293,7 @@ uv pip install -e .
 
 ### Agent Fails to Initialize
 
-Ensure you have the required LLM API keys in your `.env` file.
+Ensure you have set `GEMINI_API_KEY` in your `.env` file. Get your key from [Google AI Studio](https://aistudio.google.com/apikey).
 
 ### Proxy Won't Start
 

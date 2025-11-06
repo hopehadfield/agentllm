@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Optional
 
 from agno.agent import Agent
-from agno.models.openai import OpenAIChat
+from agno.models.google import Gemini
 from agno.db.sqlite import SqliteDb
 
 # Shared database for all agents to enable session management
@@ -25,7 +25,7 @@ def create_echo_agent(
         max_tokens: Maximum tokens in response
         **model_kwargs: Additional model parameters
     """
-    model_params = {"id": "gpt-4o-mini"}
+    model_params = {"id": "gemini-2.0-flash"}
     if temperature is not None:
         model_params["temperature"] = temperature
     if max_tokens is not None:
@@ -34,7 +34,7 @@ def create_echo_agent(
 
     return Agent(
         name="echo",
-        model=OpenAIChat(**model_params),
+        model=Gemini(**model_params),
         description="A simple agent that echoes back messages",
         instructions=[
             "You are a helpful assistant that echoes back what users say.",
@@ -61,7 +61,7 @@ def create_assistant_agent(
         max_tokens: Maximum tokens in response
         **model_kwargs: Additional model parameters
     """
-    model_params = {"id": "gpt-4o-mini"}
+    model_params = {"id": "gemini-2.0-flash"}
     if temperature is not None:
         model_params["temperature"] = temperature
     if max_tokens is not None:
@@ -70,7 +70,7 @@ def create_assistant_agent(
 
     return Agent(
         name="assistant",
-        model=OpenAIChat(**model_params),
+        model=Gemini(**model_params),
         description="A helpful general-purpose assistant",
         instructions=[
             "You are a helpful AI assistant.",
@@ -98,7 +98,7 @@ def create_code_agent(
         max_tokens: Maximum tokens in response
         **model_kwargs: Additional model parameters
     """
-    model_params = {"id": "gpt-4o-mini"}
+    model_params = {"id": "gemini-2.0-flash"}
     if temperature is not None:
         model_params["temperature"] = temperature
     if max_tokens is not None:
@@ -107,7 +107,7 @@ def create_code_agent(
 
     return Agent(
         name="code-helper",
-        model=OpenAIChat(**model_params),
+        model=Gemini(**model_params),
         description="A coding assistant that helps with programming tasks",
         instructions=[
             "You are an expert programming assistant.",
