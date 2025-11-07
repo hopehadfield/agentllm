@@ -151,3 +151,170 @@ def hello(session):
         print(f"   {result.stdout}")
 
     print("\n✨ Test complete!\n")
+
+
+# =============================================================================
+# Docker Compose Development Sessions
+# =============================================================================
+
+
+def _check_env():
+    """Check if .env file exists and has required variables."""
+    import sys
+    from pathlib import Path
+
+    env_file = Path(".env")
+
+    # Check if .env exists
+    if not env_file.exists():
+        print("❌ Error: .env file not found")
+        print("\n💡 Create .env from template:")
+        print("   cp .env.example .env")
+        print("   # Then edit .env and add your GEMINI_API_KEY")
+        sys.exit(1)
+
+    # Load .env and check for required variables
+    with open(env_file) as f:
+        env_content = f.read()
+
+    if "GEMINI_API_KEY" not in env_content or "AIzaSy..." in env_content:
+        print("❌ Error: GEMINI_API_KEY is not set in .env")
+        print("\n💡 Edit .env and add your Google Gemini API key")
+        print("   Get your key from: https://aistudio.google.com/apikey")
+        sys.exit(1)
+
+    print("✅ Environment configuration validated\n")
+
+
+@nox.session(venv_backend="none")
+def dev(session):
+    """Start local development environment with Docker Compose.
+
+    Examples:
+        nox -s dev              # Start in foreground
+        nox -s dev -- --build   # Rebuild and start
+        nox -s dev -- -d        # Start in background (detached)
+    """
+    import sys
+
+    _check_env()
+
+    args = ["docker", "compose", "up"]
+
+    # Parse session arguments
+    if session.posargs:
+        if "--build" in session.posargs:
+            args.append("--build")
+        if "-d" in session.posargs or "--detach" in session.posargs:
+            args.append("-d")
+
+    print("🚀 Starting development environment...")
+    print(f"   Command: {' '.join(args)}\n")
+
+    try:
+        session.run(*args, external=True)
+    except KeyboardInterrupt:
+        print("\n\n⏹️  Stopping containers...")
+        session.run("docker", "compose", "down", external=True)
+        sys.exit(0)
+
+
+@nox.session(venv_backend="none")
+def dev_build(session):
+    """Build and start development environment (forces rebuild)."""
+    _check_env()
+
+    print("🔨 Building and starting development environment...")
+    session.run("docker", "compose", "up", "--build", external=True)
+
+
+@nox.session(venv_backend="none")
+def dev_detach(session):
+    """Start development environment in background."""
+    import subprocess
+    import time
+
+    _check_env()
+
+    print("🚀 Starting development environment in background...")
+    session.run("docker", "compose", "up", "-d", external=True)
+
+    print("\n⏳ Waiting for services to be healthy...")
+
+    # Wait up to 60 seconds for litellm-proxy to be healthy
+    max_wait = 60
+    waited = 0
+    healthy = False
+
+    while waited < max_wait:
+        result = subprocess.run(["docker", "compose", "ps"], capture_output=True, text=True)
+        if "litellm-proxy" in result.stdout and "healthy" in result.stdout:
+            healthy = True
+            break
+        time.sleep(2)
+        waited += 2
+        print(".", end="", flush=True)
+
+    print("\n")
+
+    if healthy:
+        print("✅ LiteLLM Proxy is healthy\n")
+    else:
+        print("⚠️  Warning: LiteLLM Proxy did not become healthy within 60s")
+        print("   Check logs with: nox -s dev-logs\n")
+
+    print("🎉 Services started!\n")
+    print("📍 URLs:")
+    print("   Open WebUI:       http://localhost:3000")
+    print("   LiteLLM Proxy:    http://localhost:8890")
+    print("   Health Check:     http://localhost:8890/health")
+    print("\n💡 Useful commands:")
+    print("   View logs:        nox -s dev-logs")
+    print("   Stop services:    nox -s dev-stop")
+    print("   Clean everything: nox -s dev-clean")
+    print()
+
+
+@nox.session(venv_backend="none")
+def dev_logs(session):
+    """View logs from development containers.
+
+    Examples:
+        nox -s dev-logs                    # All services
+        nox -s dev-logs -- litellm-proxy   # Specific service
+    """
+    args = ["docker", "compose", "logs", "-f"]
+
+    if session.posargs:
+        args.extend(session.posargs)
+
+    print("📜 Viewing container logs (Ctrl+C to exit)...\n")
+    session.run(*args, external=True)
+
+
+@nox.session(venv_backend="none")
+def dev_stop(session):
+    """Stop development containers (preserves data)."""
+    print("⏹️  Stopping development containers...")
+    session.run("docker", "compose", "down", external=True)
+    print("✅ Containers stopped (data preserved)")
+
+
+@nox.session(venv_backend="none")
+def dev_clean(session):
+    """Stop containers and remove all data (including volumes).
+
+    ⚠️  WARNING: This will delete all data including database and chat history!
+    """
+    import sys
+
+    print("⚠️  WARNING: This will delete all data including database and chat history!")
+    response = input("Continue? (y/N) ")
+
+    if response.lower() != "y":
+        print("Cleanup cancelled")
+        sys.exit(0)
+
+    print("\n🧹 Cleaning up containers and volumes...")
+    session.run("docker", "compose", "down", "-v", external=True)
+    print("✅ Cleanup complete")

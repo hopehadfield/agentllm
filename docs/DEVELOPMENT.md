@@ -1,0 +1,508 @@
+# Local Development Guide
+
+This guide explains how to run the Sidekick Agent application locally using Docker containers.
+
+## Architecture
+
+```
+┌──────────────────────────────────────────────┐
+│            Docker Compose                     │
+│                                               │
+│  ┌─────────────────┐    ┌─────────────────┐ │
+│  │   OpenWebUI     │───▶│ LiteLLM Proxy   │ │
+│  │   :3000→8080    │    │    :8890        │ │
+│  │ (Official Image)│    │ (Custom Build)  │ │
+│  └────────┬────────┘    └────────┬────────┘ │
+│           │                      │           │
+│  ┌────────▼────────┐    ┌────────▼────────┐ │
+│  │ openwebui       │    │ litellm-data    │ │
+│  │   volume        │    │   volume        │ │
+│  └─────────────────┘    └─────────────────┘ │
+│                                  │           │
+│                         ┌────────▼────────┐ │
+│                         │  Local code     │ │
+│                         │  (mounted)      │ │
+│                         └─────────────────┘ │
+└───────────────────────────────────────────────┘
+                           │
+                ┌──────────▼────────────┐
+                │  Google Gemini API    │
+                │  (External - HTTPS)   │
+                └───────────────────────┘
+```
+
+## Quick Start
+
+### Prerequisites
+
+1. **Docker Desktop** (or Docker + Docker Compose)
+   - Install from: https://docs.docker.com/get-docker/
+   - Verify: `docker compose version`
+
+2. **Google Gemini API Key** (Required)
+   - Get from: https://aistudio.google.com/apikey
+   - Free tier available
+
+### Setup (5 minutes)
+
+1. **Clone and navigate to the repository**
+```bash
+cd /path/to/sidekick/agentllm
+```
+
+2. **Create environment file**
+```bash
+cp .env.example .env
+```
+
+3. **Edit `.env` and add your API key**
+```bash
+# Required: Add your Gemini API key
+GEMINI_API_KEY=AIzaSy...  # Replace with your actual key
+
+# Optional: Customize master key
+LITELLM_MASTER_KEY=sk-agno-test-key-12345
+
+# Optional: Enable OAuth (see OAuth section below)
+ENABLE_OAUTH_SIGNUP=false
+```
+
+4. **Start the application**
+```bash
+nox -s dev-build
+```
+
+5. **Open your browser**
+   - Navigate to: http://localhost:3000
+   - Create an account or sign in
+   - Start chatting with `agno/release-manager`
+
+That's it! 🎉
+
+## Development Commands (via Nox)
+
+The project uses [Nox](https://nox.thea.codes/) for managing development tasks. All Docker Compose operations are available as nox sessions.
+
+### Available Sessions
+
+| Command | Description |
+|---------|-------------|
+| `nox -s dev` | Start development environment (foreground) |
+| `nox -s dev-build` | Build and start (forces rebuild) |
+| `nox -s dev-detach` | Start in background with health checks |
+| `nox -s dev-logs` | View container logs |
+| `nox -s dev-stop` | Stop all containers |
+| `nox -s dev-clean` | Stop containers and remove all data |
+
+### Examples
+
+```bash
+# Start with build (first time or after dependency changes)
+nox -s dev-build
+
+# Start in background
+nox -s dev-detach
+
+# View logs
+nox -s dev-logs
+
+# View logs for specific service
+nox -s dev-logs -- litellm-proxy
+
+# Stop services
+nox -s dev-stop
+
+# Clean everything (deletes data!)
+nox -s dev-clean
+```
+
+## Manual Docker Compose Commands
+
+If you prefer to use docker compose directly:
+
+```bash
+# Start services (foreground)
+docker compose up
+
+# Start services (background)
+docker compose up -d
+
+# Build and start
+docker compose up --build
+
+# Stop services
+docker compose down
+
+# Stop and remove volumes (deletes data)
+docker compose down -v
+
+# View logs
+docker compose logs -f
+
+# View logs for specific service
+docker compose logs -f litellm-proxy
+docker compose logs -f open-webui
+
+# Restart a service
+docker compose restart litellm-proxy
+
+# Rebuild a specific service
+docker compose build litellm-proxy
+```
+
+## Development Workflow
+
+### Hot Reloading
+
+The local setup mounts your source code into the container, allowing for **live code updates**:
+
+```yaml
+volumes:
+  - ./src/agentllm:/app/agentllm  # Your code is mounted here
+```
+
+**To apply code changes:**
+
+1. Edit files in `src/agentllm/`
+2. Restart the LiteLLM service:
+   ```bash
+   docker compose restart litellm-proxy
+   ```
+
+### Viewing Logs
+
+Monitor what's happening in real-time:
+
+```bash
+# All services
+docker compose logs -f
+
+# Just LiteLLM proxy
+docker compose logs -f litellm-proxy
+
+# Just OpenWebUI
+docker compose logs -f open-webui
+```
+
+### Accessing the Database
+
+The SQLite database is stored in a Docker volume. To access it:
+
+```bash
+# Copy database to local filesystem
+docker compose cp litellm-proxy:/app/tmp/agno_sessions.db ./agno_sessions.db
+
+# Or exec into the container
+docker compose exec litellm-proxy /bin/bash
+cd /app/tmp
+sqlite3 agno_sessions.db
+```
+
+### Inspecting Containers
+
+```bash
+# List running containers
+docker compose ps
+
+# Exec into litellm-proxy
+docker compose exec litellm-proxy bash
+
+# Exec into open-webui
+docker compose exec open-webui bash
+```
+
+## Configuration
+
+### Environment Variables
+
+All configuration is in `.env`:
+
+```bash
+# Required
+GEMINI_API_KEY=AIzaSy...
+
+# Optional: LiteLLM configuration
+LITELLM_MASTER_KEY=sk-agno-test-key-12345
+LITELLM_PORT=8890
+
+# Optional: OAuth
+ENABLE_OAUTH_SIGNUP=false
+OAUTH_CLIENT_ID=xxx.apps.googleusercontent.com
+OAUTH_CLIENT_SECRET=xxx
+
+# Optional: Google Drive
+GDRIVE_CLIENT_ID=xxx.apps.googleusercontent.com
+GDRIVE_CLIENT_SECRET=xxx
+```
+
+### Enabling Google OAuth (Optional)
+
+To enable Google sign-in for Open WebUI:
+
+1. **Create OAuth credentials** in [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
+   - Application type: **Web application**
+   - Authorized redirect URI: `http://localhost:3000/oauth/google/callback`
+
+2. **Update `.env`**:
+   ```bash
+   ENABLE_OAUTH_SIGNUP=true
+   OAUTH_CLIENT_ID=your_client_id.apps.googleusercontent.com
+   OAUTH_CLIENT_SECRET=your_client_secret
+   ```
+
+3. **Restart services**:
+   ```bash
+   docker compose restart
+   ```
+
+### Enabling Google Drive Integration (Optional)
+
+To enable Google Drive features in the Release Manager agent:
+
+1. **Enable Google Drive API** in [Google Cloud Console](https://console.cloud.google.com)
+
+2. **Create OAuth credentials**:
+   - Application type: **Web application**
+   - Authorized redirect URI: `http://localhost`
+
+3. **Update `.env`**:
+   ```bash
+   GDRIVE_CLIENT_ID=your_client_id.apps.googleusercontent.com
+   GDRIVE_CLIENT_SECRET=your_client_secret
+   ```
+
+4. **Restart services**:
+   ```bash
+   docker compose restart litellm-proxy
+   ```
+
+## Data Persistence
+
+### Volumes
+
+Two Docker volumes persist data across restarts:
+
+1. **`litellm-data`**: SQLite database and Google Drive workspace
+   - Database: `/app/tmp/agno_sessions.db`
+   - Workspace: `/app/tmp/gdrive_workspace/`
+
+2. **`openwebui`**: User accounts and UI settings
+   - Data: `/app/backend/data`
+
+### Backing Up Data
+
+```bash
+# Backup database
+docker compose cp litellm-proxy:/app/tmp/agno_sessions.db ./backup-$(date +%Y%m%d).db
+
+# Restore database
+docker compose cp ./backup-20250107.db litellm-proxy:/app/tmp/agno_sessions.db
+docker compose restart litellm-proxy
+```
+
+### Resetting Data
+
+```bash
+# Remove all data (fresh start)
+nox -s dev-clean
+
+# Or manually
+docker compose down -v
+```
+
+## Troubleshooting
+
+### Container won't start
+
+**Check logs:**
+```bash
+docker compose logs litellm-proxy
+```
+
+**Common issues:**
+- Missing `GEMINI_API_KEY` in `.env`
+- Invalid API key
+- Port 8890 or 3000 already in use
+
+### Port already in use
+
+Change ports in `compose.yaml`:
+```yaml
+services:
+  litellm-proxy:
+    ports:
+      - "8891:8890"  # Use port 8891 instead
+
+  open-webui:
+    ports:
+      - "3001:8080"  # Use port 3001 instead
+```
+
+Then update the connection in OpenWebUI environment:
+```yaml
+OPENAI_API_BASE_URLS: "http://litellm-proxy:8890/v1"  # Keep this the same (internal)
+```
+
+### Health check failing
+
+The LiteLLM container has a health check that calls `/health`:
+
+```bash
+# Check health endpoint manually
+curl http://localhost:8890/health
+
+# View health status
+docker compose ps
+```
+
+**If unhealthy:**
+1. Check logs: `docker compose logs litellm-proxy`
+2. Verify `GEMINI_API_KEY` is set
+3. Ensure config file is mounted correctly
+
+### OAuth not working
+
+1. **Verify redirect URI** matches exactly:
+   ```
+   http://localhost:3000/oauth/google/callback
+   ```
+
+2. **Check environment variables**:
+   ```bash
+   docker compose exec open-webui env | grep OAUTH
+   ```
+
+3. **Restart OpenWebUI**:
+   ```bash
+   docker compose restart open-webui
+   ```
+
+### Database locked errors
+
+SQLite doesn't support concurrent writes. Ensure:
+- Only one LiteLLM container is running
+- No manual database access while container is running
+
+```bash
+# Check running containers
+docker compose ps
+
+# Should show only ONE litellm-proxy container
+```
+
+### Code changes not reflected
+
+After editing code in `src/agentllm/`:
+
+```bash
+# Restart the service
+docker compose restart litellm-proxy
+
+# Or rebuild if dependencies changed
+docker compose up --build -d
+```
+
+## Performance Tips
+
+### Faster Rebuilds
+
+Only rebuild when dependencies change:
+```bash
+# Code changes only - just restart
+docker compose restart litellm-proxy
+
+# Dependencies changed - rebuild
+docker compose build litellm-proxy
+docker compose up -d
+```
+
+### Resource Limits
+
+If containers use too much memory/CPU, add limits to `compose.yaml`:
+
+```yaml
+services:
+  litellm-proxy:
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+```
+
+## Testing
+
+### Health Check
+
+```bash
+# LiteLLM health
+curl http://localhost:8890/health
+
+# OpenWebUI
+curl http://localhost:3000/health
+```
+
+### API Testing
+
+```bash
+# List models
+curl http://localhost:8890/v1/models \
+  -H "Authorization: Bearer sk-agno-test-key-12345"
+
+# Chat completion
+curl http://localhost:8890/v1/chat/completions \
+  -H "Authorization: Bearer sk-agno-test-key-12345" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "agno/release-manager",
+    "messages": [{"role": "user", "content": "Hello!"}]
+  }'
+```
+
+## Differences from Production
+
+| Feature | Local Development | OpenShift Production |
+|---------|------------------|----------------------|
+| Build | `Dockerfile.local` | `openshift/Dockerfile` |
+| Code mounting | ✅ Live mounted | ❌ Baked into image |
+| User | root (dev convenience) | Non-root (security) |
+| Health checks | Basic curl | Full K8s probes |
+| Replicas | Single container | Multiple OpenWebUI pods |
+| TLS | HTTP only | HTTPS with edge termination |
+| Secrets | `.env` file | Kubernetes Secrets |
+
+## Next Steps
+
+### Deploy to OpenShift
+
+When ready for production, see [openshift/README.md](openshift/README.md) for deployment instructions.
+
+### Customize Configuration
+
+- Edit `src/agentllm/proxy_config.yaml` to add models
+- Modify agent behavior in `src/agentllm/custom_handler.py`
+- Adjust UI settings via OpenWebUI environment variables
+
+### Add Features
+
+1. Make changes to code in `src/agentllm/`
+2. Restart services: `docker compose restart litellm-proxy`
+3. Test in browser at http://localhost:3000
+4. Commit changes when ready
+
+## Getting Help
+
+- View logs: `docker compose logs -f`
+- Check container status: `docker compose ps`
+- Inspect environment: `docker compose exec litellm-proxy env`
+- Test API: `curl http://localhost:8890/health`
+
+## Clean Up
+
+```bash
+# Stop services (keeps data)
+nox -s dev-stop
+
+# Remove everything (including data)
+nox -s dev-clean
+```
