@@ -392,7 +392,7 @@ class GoogleDriveConfig(BaseToolkitConfig):
         # Generate authorization URL with state parameter
         auth_url, _ = flow.authorization_url(
             access_type="offline",
-            include_granted_scopes="true",
+            include_granted_scopes=False,  # Don't include previously granted scopes
             state=user_id,
             prompt="consent",  # Force consent screen to ensure refresh_token
         )
