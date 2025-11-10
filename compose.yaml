@@ -6,21 +6,10 @@ services:
     container_name: litellm-proxy
     ports:
       - "8890:8890"
-    environment:
-      # Required API Keys
-      GEMINI_API_KEY: "${GEMINI_API_KEY}"
-      LITELLM_MASTER_KEY: "${LITELLM_MASTER_KEY:-sk-agno-test-key-12345}"
-
-      # Optional: Google Drive integration
-      GDRIVE_CLIENT_ID: "${GDRIVE_CLIENT_ID}"
-      GDRIVE_CLIENT_SECRET: "${GDRIVE_CLIENT_SECRET}"
-
-      # Database configuration
-      DB_PATH: "/app/tmp/agno_sessions.db"
-
-      # Python configuration
-      PYTHONUNBUFFERED: "1"
-      PYTHONPATH: "/app"
+    # Load environment variables from shared files
+    env_file:
+      - .env.shared          # Non-sensitive shared configuration
+      - .env.secrets         # Sensitive credentials (git-ignored)
     volumes:
       # Mount local code for development (hot reload)
       - ./src/agentllm:/app/agentllm
@@ -41,49 +30,17 @@ services:
     container_name: open-webui
     ports:
       - "3000:8080"
+    # Load environment variables from shared files
+    env_file:
+      - .env.shared          # Non-sensitive shared configuration
+      - .env.secrets         # Sensitive credentials (git-ignored)
     environment:
-      # Point to the LiteLLM proxy (configurable for local dev or containerized mode)
-      # Dev mode (local proxy): Set OPENAI_API_BASE_URL=http://host.docker.internal:8890/v1
-      # Production mode (both containerized): Uses default http://litellm-proxy:8890/v1
+      # Override: Point to LiteLLM proxy (note: different variable name for OpenWebUI)
+      # Compose uses OPENAI_API_BASE_URLS (plural) with the value from OPENAI_API_BASE_URL (singular)
+      # Dev mode (local proxy): http://host.docker.internal:8890/v1
+      # Production mode (both containerized): http://litellm-proxy:8890/v1
       OPENAI_API_BASE_URLS: "${OPENAI_API_BASE_URL:-http://litellm-proxy:8890/v1}"
       OPENAI_API_KEYS: "${LITELLM_MASTER_KEY:-sk-agno-test-key-12345}"
-
-      # Disable other providers and features
-      ENABLE_OLLAMA_API: "false"
-      ENABLE_COMMUNITY_SHARING: "false"
-      ENABLE_RAG_WEB_SEARCH: "false"
-
-      # Set default model
-      DEFAULT_MODELS: "agno/release-manager"
-
-      # WebUI settings
-      WEBUI_NAME: "${WEBUI_NAME:-Sidekick Agent (Local)}"
-      WEBUI_URL: "${WEBUI_URL:-http://localhost:3000}"
-      WEBUI_AUTH: "true"
-      ENABLE_SIGNUP: "false"
-
-      # Security settings (dev mode)
-      WEBUI_SESSION_COOKIE_SAME_SITE: "lax"
-      WEBUI_SESSION_COOKIE_SECURE: "false"
-      WEBUI_AUTH_COOKIE_SECURE: "false"
-
-      # Logging
-      LOG_LEVEL: "${LOG_LEVEL:-DEBUG}"
-      UVICORN_LOG_LEVEL: "${UVICORN_LOG_LEVEL:-debug}"
-      GLOBAL_LOG_LEVEL: "${GLOBAL_LOG_LEVEL:-DEBUG}"
-
-      # Enable verbose logging
-      WEBUI_DEBUG: "true"
-      ENABLE_FORWARD_USER_INFO_HEADERS: "true"
-
-      # Google OAuth for user authentication (optional)
-      ENABLE_OAUTH_SIGNUP: "${ENABLE_OAUTH_SIGNUP:-false}"
-      OAUTH_PROVIDER_NAME: "Google"
-      OAUTH_CLIENT_ID: "${OAUTH_CLIENT_ID}"
-      OAUTH_CLIENT_SECRET: "${OAUTH_CLIENT_SECRET}"
-      OAUTH_SCOPES: "openid email profile"
-      OPENID_PROVIDER_URL: "https://accounts.google.com/.well-known/openid-configuration"
-      OAUTH_MERGE_ACCOUNTS_BY_EMAIL: "true"
 
     # Enable host.docker.internal on all platforms (including Linux)
     extra_hosts:

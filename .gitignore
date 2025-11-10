@@ -37,6 +37,10 @@ ENV/
 .env
 .envrc
 .env.local
+.env.secrets
+
+# Secrets (service account keys, etc.)
+secrets/
 
 # Test coverage
 .coverage
