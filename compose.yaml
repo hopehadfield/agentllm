@@ -43,16 +43,34 @@ services:
       - "3000:8080"
     environment:
       # Point to the LiteLLM proxy (configurable for local dev or containerized mode)
-      # Dev mode (local proxy): Set LITELLM_PROXY_URL=http://host.docker.internal:8890/v1
+      # Dev mode (local proxy): Set OPENAI_API_BASE_URL=http://host.docker.internal:8890/v1
       # Production mode (both containerized): Uses default http://litellm-proxy:8890/v1
-      OPENAI_API_BASE_URLS: "${LITELLM_PROXY_URL:-http://litellm-proxy:8890/v1}"
+      OPENAI_API_BASE_URLS: "${OPENAI_API_BASE_URL:-http://litellm-proxy:8890/v1}"
       OPENAI_API_KEYS: "${LITELLM_MASTER_KEY:-sk-agno-test-key-12345}"
 
-      # Disable other providers
+      # Disable other providers and features
       ENABLE_OLLAMA_API: "false"
+      ENABLE_COMMUNITY_SHARING: "false"
+      ENABLE_RAG_WEB_SEARCH: "false"
 
       # Set default model
       DEFAULT_MODELS: "agno/release-manager"
+
+      # WebUI settings
+      WEBUI_NAME: "${WEBUI_NAME:-Sidekick Agent (Local)}"
+      WEBUI_URL: "${WEBUI_URL:-http://localhost:3000}"
+      WEBUI_AUTH: "true"
+      ENABLE_SIGNUP: "false"
+
+      # Security settings (dev mode)
+      WEBUI_SESSION_COOKIE_SAME_SITE: "lax"
+      WEBUI_SESSION_COOKIE_SECURE: "false"
+      WEBUI_AUTH_COOKIE_SECURE: "false"
+
+      # Logging
+      LOG_LEVEL: "${LOG_LEVEL:-DEBUG}"
+      UVICORN_LOG_LEVEL: "${UVICORN_LOG_LEVEL:-debug}"
+      GLOBAL_LOG_LEVEL: "${GLOBAL_LOG_LEVEL:-DEBUG}"
 
       # Enable verbose logging
       WEBUI_DEBUG: "true"
@@ -66,9 +84,6 @@ services:
       OAUTH_SCOPES: "openid email profile"
       OPENID_PROVIDER_URL: "https://accounts.google.com/.well-known/openid-configuration"
       OAUTH_MERGE_ACCOUNTS_BY_EMAIL: "true"
-
-      # UI Customization
-      WEBUI_NAME: "Sidekick Agent (Local)"
 
     # Enable host.docker.internal on all platforms (including Linux)
     extra_hosts:

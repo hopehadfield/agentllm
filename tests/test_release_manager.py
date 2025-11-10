@@ -54,30 +54,36 @@ class TestToolkitConfiguration:
         # Create agent with a required toolkit
         agent = ReleaseManager()
 
-        # Add a required toolkit config (mock JiraConfig as required)
-        with patch.object(JiraConfig, "is_required", return_value=True):
-            with patch.object(JiraConfig, "is_configured", return_value=False):
-                with patch.object(
-                    JiraConfig, "get_config_prompt", return_value="Please configure JIRA"
-                ):
-                    # Add the mocked required config
-                    agent.toolkit_configs.append(JiraConfig())
+        # Mock GoogleDrive as configured so we can test Jira prompting
+        with patch.object(agent.toolkit_configs[0], "is_configured", return_value=True):
+            # Mock SystemPromptExtensionConfig as configured (it depends on GDrive)
+            with patch.object(agent.toolkit_configs[2], "is_configured", return_value=True):
+                # Add a required toolkit config (mock JiraConfig as required)
+                with patch.object(JiraConfig, "is_required", return_value=True):
+                    with patch.object(JiraConfig, "is_configured", return_value=False):
+                        with patch.object(
+                            JiraConfig, "get_config_prompt", return_value="Please configure JIRA"
+                        ):
+                            # Add the mocked required config
+                            agent.toolkit_configs.append(JiraConfig())
 
-                    # User tries to send a message without configuring
-                    response = agent.run("Hello!", user_id="new-user")
+                            # User tries to send a message without configuring
+                            response = agent.run("Hello!", user_id="new-user")
 
-                    # Should get config prompt, not agent response
-                    content = (
-                        str(response.content) if hasattr(response, "content") else str(response)
-                    )
-                    assert "configure" in content.lower() or "jira" in content.lower()
+                            # Should get config prompt, not agent response
+                            content = (
+                                str(response.content)
+                                if hasattr(response, "content")
+                                else str(response)
+                            )
+                            assert "configure" in content.lower() or "jira" in content.lower()
 
     def test_google_drive_is_required(self):
         """Test that Google Drive is required (like all toolkits)."""
         agent = ReleaseManager()
 
-        # GoogleDriveConfig is the only default config and should be required
-        assert len(agent.toolkit_configs) == 1
+        # Should have GoogleDriveConfig, JiraConfig, and SystemPromptExtensionConfig
+        assert len(agent.toolkit_configs) == 3
         gdrive_config = agent.toolkit_configs[0]
         assert gdrive_config.is_required(), "GoogleDriveConfig should be required"
 
@@ -150,21 +156,28 @@ class TestToolkitConfiguration:
         mock_creds = MagicMock()
         with patch("agentllm.agents.toolkit_configs.gdrive_config.Flow") as mock_flow:
             with patch("agentllm.agents.toolkit_configs.gdrive_config.build") as mock_build:
-                mock_flow_instance = MagicMock()
-                mock_flow_instance.credentials = mock_creds
-                mock_flow.from_client_config.return_value = mock_flow_instance
+                # Mock token storage to avoid JSON serialization issues with MagicMock
+                with patch.object(gdrive_config.token_storage, "upsert_gdrive_token"):
+                    with patch.object(
+                        gdrive_config.token_storage,
+                        "get_gdrive_credentials",
+                        return_value=mock_creds,
+                    ):
+                        mock_flow_instance = MagicMock()
+                        mock_flow_instance.credentials = mock_creds
+                        mock_flow.from_client_config.return_value = mock_flow_instance
 
-                mock_service = MagicMock()
-                mock_service.about().get().execute.return_value = {
-                    "user": {"displayName": "Test", "emailAddress": "test@example.com"}
-                }
-                mock_build.return_value = mock_service
+                        mock_service = MagicMock()
+                        mock_service.about().get().execute.return_value = {
+                            "user": {"displayName": "Test", "emailAddress": "test@example.com"}
+                        }
+                        mock_build.return_value = mock_service
 
-                # Authorize
-                agent.run("4/0AeaYSHBxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", user_id="test-user")
+                        # Authorize
+                        agent.run("4/0AeaYSHBxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", user_id="test-user")
 
-        # Now should be configured
-        assert gdrive_config.is_configured("test-user")
+                        # Now should be configured
+                        assert gdrive_config.is_configured("test-user")
 
     def test_google_drive_prompts_auth_immediately(self):
         """Test that Google Drive prompts authorization immediately (required toolkit)."""
@@ -421,8 +434,8 @@ class TestRequiredVsOptionalConfigs:
         """Test that GoogleDriveConfig is required."""
         agent = ReleaseManager()
 
-        # GoogleDrive should be the only default config and should be required
-        assert len(agent.toolkit_configs) == 1
+        # Should have GoogleDriveConfig, JiraConfig, and SystemPromptExtensionConfig
+        assert len(agent.toolkit_configs) == 3
         gdrive_config = agent.toolkit_configs[0]
         assert gdrive_config.is_required(), "GoogleDriveConfig should be required"
 
@@ -431,252 +444,23 @@ class TestRequiredVsOptionalConfigs:
         """Test that required configs prevent agent usage until configured."""
         agent = ReleaseManager()
 
-        # Add a required config (JiraConfig is required by default)
-        jira_config = JiraConfig()
-        agent.toolkit_configs.append(jira_config)
-
-        # Mock the prompt
-        mock_jira_tools.return_value.validate_connection.return_value = (True, "Connected")
-
-        # Try to use agent without configuring Jira
-        response = agent.run("Hello!", user_id="new-user")
-
-        # Should get JIRA config prompt, not agent response
-        content = str(response.content) if hasattr(response, "content") else str(response)
-        assert "jira" in content.lower() or "token" in content.lower()
-
-
-class TestExtendedSystemPrompt:
-    """Tests for extended system prompt loading from Google Docs."""
-
-    @pytest.fixture
-    def mock_env_and_gdrive(self):
-        """Fixture that mocks environment variable and Google Drive setup."""
-        # Mock environment variable
-        with patch.dict(
-            os.environ, {"RELEASE_MANAGER_SYSTEM_PROMPT_GDRIVE_URL": "test-doc-id-123"}
-        ):
-            # Mock Google Drive toolkit
-            with patch("agentllm.tools.gdrive_toolkit.GoogleDriveTools") as mock_tools:
-                mock_toolkit = MagicMock()
-                mock_toolkit.get_document_content.return_value = (
-                    "# Extended Instructions\n\nYou are a specialized release manager."
-                )
-                mock_tools.return_value = mock_toolkit
-
-                yield mock_toolkit
-
-    def test_fetch_extended_prompt_success(self, mock_env_and_gdrive):
-        """Test successful fetch of extended system prompt."""
-        agent = ReleaseManager()
-
-        # Mock is_configured to return True
+        # Mock GoogleDrive and SystemPromptExtension as configured so we can test Jira
         with patch.object(agent.toolkit_configs[0], "is_configured", return_value=True):
-            # Patch get_toolkit to return our mock
-            with patch.object(
-                agent.toolkit_configs[0], "get_toolkit", return_value=mock_env_and_gdrive
-            ):
-                # Fetch extended prompt
-                prompt = agent._fetch_extended_system_prompt("test-user")
+            with patch.object(agent.toolkit_configs[2], "is_configured", return_value=True):
+                # Add a required config (JiraConfig is required by default)
+                jira_config = JiraConfig()
+                agent.toolkit_configs.append(jira_config)
 
-                # Verify content
-                assert prompt is not None
-                assert "Extended Instructions" in prompt
-                assert "specialized release manager" in prompt
+                # Mock the prompt
+                mock_jira_tools.return_value.validate_connection.return_value = (True, "Connected")
 
-                # Verify toolkit method was called
-                mock_env_and_gdrive.get_document_content.assert_called_once_with("test-doc-id-123")
+                # Try to use agent without configuring Jira
+                response = agent.run("Hello!", user_id="new-user")
 
-    def test_fetch_extended_prompt_caching(self, mock_env_and_gdrive):
-        """Test that extended prompt is cached per user."""
-        agent = ReleaseManager()
+                # Should get JIRA config prompt, not agent response
+                content = str(response.content) if hasattr(response, "content") else str(response)
+                assert "jira" in content.lower() or "token" in content.lower()
 
-        # Mock is_configured to return True
-        with patch.object(agent.toolkit_configs[0], "is_configured", return_value=True):
-            with patch.object(
-                agent.toolkit_configs[0], "get_toolkit", return_value=mock_env_and_gdrive
-            ):
-                # First fetch
-                prompt1 = agent._fetch_extended_system_prompt("test-user")
 
-                # Second fetch - should use cache
-                prompt2 = agent._fetch_extended_system_prompt("test-user")
-
-                # Should be same content
-                assert prompt1 == prompt2
-
-                # Toolkit should only be called once (cached on second call)
-                assert mock_env_and_gdrive.get_document_content.call_count == 1
-
-    def test_fetch_extended_prompt_no_env_var(self):
-        """Test error when environment variable is not set."""
-        agent = ReleaseManager()
-
-        # Configure Google Drive
-        with patch("agentllm.agents.toolkit_configs.gdrive_config.Flow") as mock_flow:
-            with patch("agentllm.agents.toolkit_configs.gdrive_config.build") as mock_build:
-                mock_creds = MagicMock()
-                mock_flow_instance = MagicMock()
-                mock_flow_instance.credentials = mock_creds
-                mock_flow.from_client_config.return_value = mock_flow_instance
-
-                mock_service = MagicMock()
-                mock_service.about().get().execute.return_value = {
-                    "user": {"displayName": "Test", "emailAddress": "test@example.com"}
-                }
-                mock_build.return_value = mock_service
-
-                agent.run("4/0AeaYSHBxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", user_id="test-user")
-
-        # Try to fetch without env var set
-        with pytest.raises(ValueError, match="RELEASE_MANAGER_SYSTEM_PROMPT_GDRIVE_URL"):
-            agent._fetch_extended_system_prompt("test-user")
-
-    def test_fetch_extended_prompt_drive_not_configured(self):
-        """Test error when Google Drive is not configured."""
-        with patch.dict(
-            os.environ, {"RELEASE_MANAGER_SYSTEM_PROMPT_GDRIVE_URL": "test-doc-id-123"}
-        ):
-            agent = ReleaseManager()
-
-            # Try to fetch without configuring Drive
-            with pytest.raises(ValueError, match="Google Drive is not configured"):
-                agent._fetch_extended_system_prompt("unconfigured-user")
-
-    def test_fetch_extended_prompt_empty_content(self, mock_env_and_gdrive):
-        """Test error when document returns empty content."""
-        # Mock empty content
-        mock_env_and_gdrive.get_document_content.return_value = ""
-
-        agent = ReleaseManager()
-
-        # Mock is_configured to return True
-        with patch.object(agent.toolkit_configs[0], "is_configured", return_value=True):
-            with patch.object(
-                agent.toolkit_configs[0], "get_toolkit", return_value=mock_env_and_gdrive
-            ):
-                # Try to fetch - should raise error for empty content
-                with pytest.raises(ValueError, match="returned empty content"):
-                    agent._fetch_extended_system_prompt("test-user")
-
-    def test_fetch_extended_prompt_api_error(self, mock_env_and_gdrive):
-        """Test error handling when Google Drive API fails."""
-        # Mock API error
-        mock_env_and_gdrive.get_document_content.side_effect = Exception("API Error")
-
-        agent = ReleaseManager()
-
-        # Mock is_configured to return True
-        with patch.object(agent.toolkit_configs[0], "is_configured", return_value=True):
-            with patch.object(
-                agent.toolkit_configs[0], "get_toolkit", return_value=mock_env_and_gdrive
-            ):
-                # Try to fetch - should raise exception
-                with pytest.raises(Exception, match="API Error"):
-                    agent._fetch_extended_system_prompt("test-user")
-
-    def test_invalidate_system_prompt(self):
-        """Test system prompt cache invalidation."""
-        agent = ReleaseManager()
-
-        # Manually add a cached prompt
-        agent._system_prompts["test-user"] = "Cached prompt content"
-
-        # Verify it exists
-        assert "test-user" in agent._system_prompts
-
-        # Invalidate
-        agent._invalidate_system_prompt("test-user")
-
-        # Verify it's removed
-        assert "test-user" not in agent._system_prompts
-
-    def test_invalidate_agent_also_invalidates_prompt(self):
-        """Test that invalidating agent also invalidates system prompt cache."""
-        agent = ReleaseManager()
-
-        # Manually add cached prompt and agent
-        agent._system_prompts["test-user"] = "Cached prompt"
-        agent._agents["test-user"] = MagicMock()
-
-        # Invalidate agent
-        agent._invalidate_agent("test-user")
-
-        # Both should be cleared
-        assert "test-user" not in agent._agents
-        assert "test-user" not in agent._system_prompts
-
-    @pytest.mark.skipif(
-        "GOOGLE_API_KEY" not in os.environ,
-        reason="GOOGLE_API_KEY not set",
-    )
-    def test_agent_creation_with_extended_prompt(self, mock_env_and_gdrive):
-        """Test that agent is created with extended prompt in instructions."""
-        agent = ReleaseManager()
-
-        # Mock is_configured to return True
-        with patch.object(agent.toolkit_configs[0], "is_configured", return_value=True):
-            with patch.object(
-                agent.toolkit_configs[0], "get_toolkit", return_value=mock_env_and_gdrive
-            ):
-                # Create agent - should fetch and include extended prompt
-                created_agent = agent._get_or_create_agent("test-user")
-
-                # Verify agent was created
-                assert created_agent is not None
-
-                # Verify extended prompt was fetched
-                mock_env_and_gdrive.get_document_content.assert_called_once()
-
-                # Verify prompt is cached
-                assert "test-user" in agent._system_prompts
-
-    def test_agent_creation_without_extended_prompt_env(self):
-        """Test that agent creation works without extended prompt configured."""
-        # No environment variable set
-        agent = ReleaseManager()
-
-        # Configure Google Drive
-        with patch("agentllm.agents.toolkit_configs.gdrive_config.Flow") as mock_flow:
-            with patch("agentllm.agents.toolkit_configs.gdrive_config.build") as mock_build:
-                with patch("agentllm.tools.gdrive_toolkit.GoogleDriveTools"):
-                    mock_creds = MagicMock()
-                    mock_flow_instance = MagicMock()
-                    mock_flow_instance.credentials = mock_creds
-                    mock_flow.from_client_config.return_value = mock_flow_instance
-
-                    mock_service = MagicMock()
-                    mock_service.about().get().execute.return_value = {
-                        "user": {"displayName": "Test", "emailAddress": "test@example.com"}
-                    }
-                    mock_build.return_value = mock_service
-
-                    agent.run("4/0AeaYSHBxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx", user_id="test-user")
-
-        # Should create agent without error (no extended prompt)
-        if "GOOGLE_API_KEY" in os.environ:
-            created_agent = agent._get_or_create_agent("test-user")
-            assert created_agent is not None
-
-    def test_extended_prompt_per_user_isolation(self, mock_env_and_gdrive):
-        """Test that extended prompts are cached separately per user."""
-        agent = ReleaseManager()
-
-        # Mock is_configured to return True for both users
-        with patch.object(agent.toolkit_configs[0], "is_configured", return_value=True):
-            with patch.object(
-                agent.toolkit_configs[0], "get_toolkit", return_value=mock_env_and_gdrive
-            ):
-                # Fetch for both users
-                prompt1 = agent._fetch_extended_system_prompt("user1")
-                prompt2 = agent._fetch_extended_system_prompt("user2")
-
-                # Both should be cached separately
-                assert "user1" in agent._system_prompts
-                assert "user2" in agent._system_prompts
-
-                # Content should be the same (same doc)
-                assert prompt1 == prompt2
-
-                # But cached separately
-                assert agent._system_prompts["user1"] == agent._system_prompts["user2"]
+# TestExtendedSystemPrompt tests removed - functionality moved to SystemPromptExtensionConfig
+# and tested in test_system_prompt_extension_config.py

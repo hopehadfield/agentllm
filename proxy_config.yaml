@@ -29,7 +29,10 @@ model_list:
 
 # General configuration
 general_settings:
-  master_key: "sk-agno-test-key-12345"  # Change this in production!
+  master_key: os.environ/LITELLM_MASTER_KEY
+
+  # Disable authentication for health checks (Kubernetes probes)
+  disable_health_check_auth: true
 
   # Map OpenWebUI headers to LiteLLM user tracking
   # Enable ENABLE_FORWARD_USER_INFO_HEADERS=true in OpenWebUI
@@ -43,13 +46,10 @@ general_settings:
 litellm_settings:
   drop_params: true  # Drop unsupported params instead of erroring
   set_verbose: false  # Disable verbose logging
-  json_logs: false
-  # Redirect LiteLLM logs to file
+  json_logs: true    # Enable JSON logs for better log aggregation
   success_callback: []
   failure_callback: []
   # Register custom Agno provider handler
-  # Handler path is relative to config location (project root)
-  # The stub file custom_handler.py imports from src/agentllm/custom_handler.py
   custom_provider_map:
     - provider: "agno"
       custom_handler: custom_handler.agno_handler
@@ -58,6 +58,3 @@ litellm_settings:
 server:
   host: 0.0.0.0
   port: 8890
-
-# Environment variables needed
-# OPENAI_API_KEY or other LLM provider keys for the underlying Agno agents

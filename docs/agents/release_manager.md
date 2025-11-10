@@ -267,3 +267,38 @@ uv run pytest tests/test_release_manager.py -v
 - [ ] Prompt template variables (e.g., `{user_name}`, `{team}`)
 - [ ] Prompt versioning and A/B testing
 - [ ] Prompt analytics and effectiveness tracking
+
+
+### Release Manager System Prompt Architecture
+
+The Release Manager uses a **dual-prompt architecture** that separates stable agent capabilities from dynamic operational context:
+
+**Embedded System Prompt** (in `release_manager.py` lines 152-181):
+- **What it contains:** Core identity, responsibilities, available tools, behavioral guidelines
+- **Purpose:** "Who you are and what you can do"
+- **Characteristics:** Stable, version-controlled, changes rarely
+- **Examples:**
+  - Identity as RHDH Release Manager
+  - Core responsibilities (Y-stream, Z-stream management)
+  - Available tools (Jira, Google Drive, GitHub)
+  - Output and behavioral guidelines
+
+**External System Prompt** (fetched from Google Drive):
+- **What it contains:** Current release context, processes, examples, Jira query templates
+- **Purpose:** "What you're currently working on and how to do it"
+- **Characteristics:** Frequently updated, context-specific, operational details
+- **Examples:**
+  - Active release versions and dates (1.7.0, 1.8.0)
+  - Jira query templates for tracking features, blockers, CVEs
+  - Release Manager Update format examples
+  - Communication guidelines and key resource links
+
+**Template Location:**
+- `docs/release_manager_system_prompt.md` - Recommended content structure for the external prompt
+- Copy this content to a Google Doc and configure via `RELEASE_MANAGER_SYSTEM_PROMPT_GDRIVE_URL`
+
+**Design Benefits:**
+- **Code changes** for capability updates (new tools, behavior changes)
+- **Doc updates** for operational changes (new releases, updated processes)
+- Easy testing of prompt changes without code deployment
+- Clear separation of concerns between stable identity and dynamic context

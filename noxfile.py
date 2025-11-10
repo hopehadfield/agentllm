@@ -219,7 +219,7 @@ def dev_local_proxy(session):
     and only run Open WebUI in a container.
 
     Prerequisites:
-        1. Ensure LITELLM_PROXY_URL is set in .env (default: http://host.docker.internal:8890/v1)
+        1. Ensure OPENAI_API_BASE_URL is set in .env (default: http://host.docker.internal:8890/v1)
         2. Start the proxy locally: nox -s proxy
 
     Examples:
@@ -283,9 +283,9 @@ def dev_full(session):
 
     _check_env()
 
-    # Override LITELLM_PROXY_URL to use container name
+    # Override OPENAI_API_BASE_URL to use container name
     env = os.environ.copy()
-    env["LITELLM_PROXY_URL"] = "http://litellm-proxy:8890/v1"
+    env["OPENAI_API_BASE_URL"] = "http://litellm-proxy:8890/v1"
 
     args = ["docker", "compose", "up"]
 

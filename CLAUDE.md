@@ -59,8 +59,7 @@ nox -s dev_local_proxy
 ```
 
 **How it works:**
-
-- `LITELLM_PROXY_URL` in `.env` is set to `http://host.docker.internal:8890/v1`
+- `OPENAI_API_BASE_URL` in `.env` is set to `http://host.docker.internal:8890/v1`
 - Open WebUI (containerized) connects to proxy on host machine
 - Works on all platforms (Mac, Linux, Windows) via `extra_hosts` configuration
 - Enables fast iteration: edit code → proxy reloads → test immediately
@@ -87,8 +86,7 @@ nox -s dev_full -- -d
 ```
 
 **How it works:**
-
-- Overrides `LITELLM_PROXY_URL` to `http://litellm-proxy:8890/v1`
+- Overrides `OPENAI_API_BASE_URL` to `http://litellm-proxy:8890/v1`
 - Both services run in Docker network
 - Matches production deployment architecture
 
@@ -117,14 +115,14 @@ nox -s dev
 
 ### Switching Between Modes
 
-The mode is controlled by the `LITELLM_PROXY_URL` environment variable in `.env`:
+The mode is controlled by the `OPENAI_API_BASE_URL` environment variable in `.env`:
 
 ```bash
 # Development mode (local proxy)
-LITELLM_PROXY_URL=http://host.docker.internal:8890/v1
+OPENAI_API_BASE_URL=http://host.docker.internal:8890/v1
 
 # Production mode (both containerized) - used as default by dev-full
-LITELLM_PROXY_URL=http://litellm-proxy:8890/v1
+OPENAI_API_BASE_URL=http://litellm-proxy:8890/v1
 ```
 
 **No manual configuration needed** - just use the appropriate `nox` command:
@@ -246,6 +244,124 @@ This pattern ensures compatibility across local development and Docker environme
 
 - `GoogleDriveConfig` - OAuth-based Google Drive access
 - `JiraConfig` - API token-based Jira access
+- `SystemPromptExtensionConfig` - Extended system prompt from Google Docs
+  - Fetches additional agent instructions from a Google Drive document
+  - Configured via `RELEASE_MANAGER_SYSTEM_PROMPT_GDRIVE_URL` environment variable
+  - Depends on `GoogleDriveConfig` (must be registered after it)
+  - Required toolkit, but silent if env var not set or GDrive not configured
+  - Fails agent creation if env var set, GDrive configured, but fetch fails
+  - Caches fetched prompts per user, invalidates on GDrive credential changes
+
+### Release Manager System Prompt Architecture
+
+The Release Manager uses a **dual-prompt architecture** that separates stable agent capabilities from dynamic operational instructions:
+
+**Embedded System Prompt** (in `release_manager.py` lines 154-191):
+- **What it contains:** Core identity, responsibilities, available tools, behavioral guidelines
+- **Purpose:** "Who you are and what you can do"
+- **Characteristics:** Stable, version-controlled, changes rarely
+- **Examples:**
+  - Identity as RHDH Release Manager
+  - Core responsibilities (Y-stream, Z-stream management)
+  - Available tools (Jira, Google Drive, GitHub)
+  - Output and behavioral guidelines
+  - Self-awareness about the dual-prompt system
+
+**External System Prompt** (fetched from Google Drive):
+- **What it contains:** Jira query patterns, response instructions, communication guidelines, process workflows
+- **Purpose:** "How to respond to specific questions and what sources to query"
+- **Characteristics:** Updated when processes or patterns change (NOT for specific release data)
+- **Examples:**
+  - Jira query patterns (reusable templates with placeholders like `RELEASE_VERSION`)
+  - Response instructions for common questions ("When user asks X, query Y, format as Z")
+  - Communication guidelines (Slack channels, meeting formats)
+  - Escalation triggers and risk identification patterns
+
+**Important Design Principles:**
+- External prompt does **NOT** contain hardcoded release data (versions, dates) - the agent queries live sources dynamically
+- External prompt is pure agent instructions, not user management documentation
+- Agent is self-aware: knows about the dual-prompt system and can suggest updates to users
+
+**Documentation:**
+- `docs/release_manager_system_prompt.md` - Pure agent instruction template (what to copy to Google Doc)
+- `docs/release_manager_prompt_guide.md` - User guide for setup and maintenance
+- Setup: Copy the template to a Google Doc and configure via `RELEASE_MANAGER_SYSTEM_PROMPT_GDRIVE_URL`
+
+**Design Benefits:**
+- **Code changes** for capability updates (new tools, behavior changes)
+- **Doc updates** for process changes (new Jira patterns, updated workflows)
+- Easy testing of prompt changes without code deployment
+- Clear separation between agent identity and operational instructions
+- Agent can inform users about the external prompt and guide them to update it
+
+#### Technical Setup (External System Prompt)
+
+**Initial Setup:**
+
+1. **Create Google Drive Document**:
+   - Copy content from `docs/release_manager_system_prompt.md`
+   - Create a new Google Drive document with this content
+   - Share with read access for all Release Manager users
+   - (Optional) Also copy `docs/release_manager_prompt_guide.md` for content maintainers
+
+2. **Configure Environment Variable**:
+   ```bash
+   # In .env file
+   RELEASE_MANAGER_SYSTEM_PROMPT_GDRIVE_URL=https://docs.google.com/document/d/1ABC123xyz/edit
+   # Or just the document ID
+   RELEASE_MANAGER_SYSTEM_PROMPT_GDRIVE_URL=1ABC123xyz
+   ```
+
+3. **Verify Prerequisites**:
+   - `GDRIVE_CLIENT_ID` and `GDRIVE_CLIENT_SECRET` configured
+   - Users must authorize Google Drive access when first interacting with agent
+   - Agent will automatically fetch and cache the prompt on first use
+
+**How Updates Work:**
+
+- **Edit Google Doc** → **Save** → **Agent fetches on next recreation**
+- No application restart or code deployment required
+- Updates take effect when:
+  - User reconfigures Google Drive access (invalidates cache)
+  - Agent is restarted (clears cache)
+  - Application is redeployed
+
+**Cache Behavior:**
+
+- Prompt is cached per user after first fetch
+- Cache persists until agent recreation
+- To force refresh: User can re-authorize Google Drive access
+
+**Troubleshooting:**
+
+Common issues and solutions:
+- **"Failed to fetch extended system prompt"**:
+  - Check document sharing permissions
+  - Verify `RELEASE_MANAGER_SYSTEM_PROMPT_GDRIVE_URL` is correct
+  - Ensure user has authorized Google Drive access
+  - Check application logs for specific error message
+
+- **Changes not reflected**:
+  - Verify Google Doc shows latest edits
+  - Check if agent was recreated after change
+  - Test with new conversation to force agent initialization
+
+- **Agent not fetching prompt**:
+  - Prompt is cached until agent recreation
+  - Normal behavior - updates only fetch on agent recreation
+
+**Production vs Development:**
+
+Consider separate prompts for different environments:
+```bash
+# Development .env
+RELEASE_MANAGER_SYSTEM_PROMPT_GDRIVE_URL=https://docs.google.com/document/d/[DEV_DOC_ID]/edit
+
+# Production .env
+RELEASE_MANAGER_SYSTEM_PROMPT_GDRIVE_URL=https://docs.google.com/document/d/[PROD_DOC_ID]/edit
+```
+
+This allows testing prompt changes before deploying to production.
 
 ### Token Storage
 
@@ -287,7 +403,8 @@ src/agentllm/
 │   └── toolkit_configs/
 │       ├── base.py                # Abstract base class
 │       ├── gdrive_config.py       # Google Drive OAuth config
-│       └── jira_config.py         # Jira API token config
+│       ├── jira_config.py         # Jira API token config
+│       └── system_prompt_extension_config.py  # System prompt extension
 ├── tools/
 │   ├── gdrive_toolkit.py          # Google Drive tools
 │   ├── gdrive_utils.py            # OAuth flow utilities
@@ -340,6 +457,98 @@ Required environment variables (see `.env.example`):
 
 - `GEMINI_API_KEY` - Required for all models (get from <https://aistudio.google.com/apikey>)
 - `LITELLM_MASTER_KEY` - API key for proxy access (default: `sk-agno-test-key-12345`)
+
+## OpenWebUI Configuration
+
+OpenWebUI is configured exclusively through environment variables (no configuration files). The project uses a standardized configuration approach across local development and production environments.
+
+### Core Configuration Variables
+
+**LiteLLM Proxy Connection:**
+```bash
+OPENAI_API_BASE_URL=http://host.docker.internal:8890/v1  # Local dev
+OPENAI_API_KEY=${LITELLM_MASTER_KEY}
+```
+
+**Branding & Defaults:**
+```bash
+WEBUI_NAME=Sidekick Agent
+WEBUI_URL=http://localhost:8080                # Required for OAuth redirects
+DEFAULT_MODELS=agno/release-manager
+```
+
+**Authentication:**
+```bash
+WEBUI_AUTH=true
+ENABLE_SIGNUP=false                            # OAuth-only signup
+ENABLE_OAUTH_SIGNUP=true
+OAUTH_CLIENT_ID=your_client_id
+OAUTH_CLIENT_SECRET=your_client_secret
+```
+
+**Security Settings:**
+```bash
+# Local development (HTTP)
+WEBUI_SESSION_COOKIE_SAME_SITE=lax
+WEBUI_SESSION_COOKIE_SECURE=false              # Set to true in production
+WEBUI_AUTH_COOKIE_SECURE=false                 # Set to true in production
+```
+
+**Logging:**
+```bash
+LOG_LEVEL=DEBUG                                # Use INFO in production
+UVICORN_LOG_LEVEL=debug
+GLOBAL_LOG_LEVEL=DEBUG
+```
+
+### Disabled Features
+
+**RAG and Web Search:**
+```bash
+ENABLE_RAG_WEB_SEARCH=false
+RAG_EMBEDDING_MODEL=""
+RAG_EMBEDDING_ENGINE=""
+```
+
+**Why RAG is Disabled:**
+- AgentLLM uses **agent-level tools** (Google Drive, Jira) for document access
+- Agent tools are superior because they:
+  - Work programmatically across all clients (not just OpenWebUI)
+  - Don't require manual document uploads per user
+  - Provide real-time access to source systems
+  - Are controlled by the agent with proper context
+
+**Other Disabled Features:**
+```bash
+ENABLE_OLLAMA_API=false                        # Using LiteLLM proxy instead
+ENABLE_COMMUNITY_SHARING=false                 # Security best practice
+OFFLINE_MODE=true                              # Production only - prevents downloads
+```
+
+### Local vs Production Configuration
+
+**Local Development:**
+- Uses `OPENAI_API_BASE_URL=http://host.docker.internal:8890/v1`
+- Cookie security disabled (HTTP mode)
+- Verbose logging (DEBUG level)
+- OAuth optional (can use basic auth)
+
+**Production (Kubernetes):**
+- Uses `OPENAI_API_BASE_URL=http://litellm-proxy-service:8890/v1`
+- Cookie security enabled (HTTPS mode)
+- Reduced logging (INFO level)
+- OAuth required (signup disabled)
+- `WEBUI_URL` auto-configured by deploy script from OpenShift route
+
+### Configuration Methods
+
+OpenWebUI supports three ways to set environment variables:
+
+1. **`.env` file** - Used locally via Docker Compose `env_file:` directive
+2. **Kubernetes ConfigMaps/Secrets** - Used in production deployment
+3. **Docker Compose `environment:`** - Direct variable specification
+
+See `.env.example` for complete local configuration template.
 
 ## Key Implementation Details
 

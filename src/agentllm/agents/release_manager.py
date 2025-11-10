@@ -11,6 +11,9 @@ from loguru import logger
 
 from agentllm.agents.toolkit_configs import GoogleDriveConfig
 from agentllm.agents.toolkit_configs.jira_config import JiraConfig
+from agentllm.agents.toolkit_configs.system_prompt_extension_config import (
+    SystemPromptExtensionConfig,
+)
 from agentllm.db import TokenStorage
 
 # Map GEMINI_API_KEY to GOOGLE_API_KEY if not set
@@ -66,9 +69,17 @@ class ReleaseManager:
             **model_kwargs: Additional model parameters
         """
         # Initialize toolkit configurations with shared token storage
+        # ORDER MATTERS: SystemPromptExtensionConfig depends on GoogleDriveConfig
+        gdrive_config = GoogleDriveConfig(token_storage=token_storage)
+        jira_config = JiraConfig(token_storage=token_storage)
+        system_prompt_config = SystemPromptExtensionConfig(
+            gdrive_config=gdrive_config, token_storage=token_storage
+        )
+
         self.toolkit_configs = [
-            GoogleDriveConfig(token_storage=token_storage),
-            JiraConfig(token_storage=token_storage),
+            gdrive_config,
+            jira_config,
+            system_prompt_config,  # Must come after gdrive_config due to dependency
         ]
 
         # Store model parameters for later agent creation
@@ -78,23 +89,6 @@ class ReleaseManager:
 
         # Store agents per user_id (agents are not shared across users)
         self._agents: dict[str, Agent] = {}
-
-        # Cache extended system prompts per user_id
-        # Fetched from Google Docs and cached until agent invalidation
-        self._system_prompts: dict[str, str] = {}
-
-    def _invalidate_system_prompt(self, user_id: str) -> None:
-        """Invalidate cached system prompt for a user.
-
-        This clears the cached extended system prompt from Google Docs,
-        forcing a fresh fetch on next agent creation.
-
-        Args:
-            user_id: User identifier
-        """
-        if user_id in self._system_prompts:
-            logger.info(f"Invalidating cached system prompt for user {user_id}")
-            del self._system_prompts[user_id]
 
     def _invalidate_agent(self, user_id: str) -> None:
         """Invalidate cached agent for a user.
@@ -108,8 +102,6 @@ class ReleaseManager:
         if user_id in self._agents:
             logger.info(f"Invalidating cached agent for user {user_id}")
             del self._agents[user_id]
-        # Also invalidate the system prompt cache
-        self._invalidate_system_prompt(user_id)
 
     def _check_and_invalidate_agent(self, config_name: str, user_id: str) -> None:
         """Check if config requires agent recreation and invalidate if needed.
@@ -124,79 +116,6 @@ class ReleaseManager:
                 self._invalidate_agent(user_id)
                 logger.info(f"Config '{config_name}' requires agent recreation for user {user_id}")
                 break
-
-    def _fetch_extended_system_prompt(self, user_id: str) -> str:
-        """Fetch extended system prompt from Google Docs.
-
-        This method retrieves additional system prompt instructions from a Google Doc
-        specified by the RELEASE_MANAGER_SYSTEM_PROMPT_GDRIVE_URL environment variable.
-        The content is cached per user until agent invalidation.
-
-        Args:
-            user_id: User identifier
-
-        Returns:
-            Extended system prompt content as a string (markdown format)
-
-        Raises:
-            ValueError: If Google Drive is not configured for the user
-            Exception: If document fetch fails (network error, permissions, invalid URL, etc.)
-        """
-        # Check cache first
-        if user_id in self._system_prompts:
-            logger.debug(f"Using cached system prompt for user {user_id}")
-            return self._system_prompts[user_id]
-
-        # Get the document URL from environment
-        doc_url = os.getenv("RELEASE_MANAGER_SYSTEM_PROMPT_GDRIVE_URL")
-        if not doc_url:
-            raise ValueError(
-                "RELEASE_MANAGER_SYSTEM_PROMPT_GDRIVE_URL environment variable not set"
-            )
-
-        logger.info(f"Fetching extended system prompt from Google Doc for user {user_id}")
-
-        # Get Google Drive toolkit for this user
-        gdrive_config = None
-        for config in self.toolkit_configs:
-            if isinstance(config, GoogleDriveConfig):
-                gdrive_config = config
-                break
-
-        if not gdrive_config:
-            raise ValueError("Google Drive config not found in toolkit configs")
-
-        if not gdrive_config.is_configured(user_id):
-            raise ValueError(
-                f"Google Drive is not configured for user {user_id}. "
-                "User must authorize Google Drive access before extended system prompt can be fetched."
-            )
-
-        # Get the toolkit instance
-        toolkit = gdrive_config.get_toolkit(user_id)
-        if not toolkit:
-            raise ValueError(f"Failed to get Google Drive toolkit for user {user_id}")
-
-        # Fetch the document content
-        try:
-            content = toolkit.get_document_content(doc_url)
-            if not content:
-                raise ValueError(f"Document at {doc_url} returned empty content")
-
-            # Cache the content
-            self._system_prompts[user_id] = content
-            logger.info(
-                f"Successfully fetched extended system prompt for user {user_id} "
-                f"({len(content)} characters)"
-            )
-
-            return content
-
-        except Exception as e:
-            logger.error(
-                f"Failed to fetch extended system prompt from {doc_url} for user {user_id}: {e}"
-            )
-            raise
 
     def _get_or_create_agent(self, user_id: str) -> Agent:
         """Get or create the underlying Agno agent for a specific user.
@@ -233,43 +152,43 @@ class ReleaseManager:
 
         # Create base instructions
         instructions = [
-            "You are a helpful AI assistant.",
-            "Answer questions and help users with various tasks.",
-            "Use markdown formatting for structured output.",
-            "Be concise and clear in your responses.",
+            "You are the Release Manager for Red Hat Developer Hub (RHDH).",
+            "Your core responsibilities include:",
+            "- Managing Y-stream releases (major versions like 1.7.0, 1.8.0)",
+            "- Managing Z-stream releases (maintenance versions like 1.6.1, 1.6.2)",
+            "- Tracking release progress, risks, and blockers",
+            "- Coordinating with Engineering, QE, Documentation, and Product Management teams",
+            "- Providing release status updates for meetings (SOS, Team Forum, Program Meeting)",
+            "- Monitoring Jira for release-related issues, features, and bugs",
+            "",
+            "Available tools:",
+            "- Jira: Query and analyze issues, epics, features, bugs, and CVEs",
+            "- Google Drive: Access release schedules, test plans, documentation plans, and feature demos",
+            "",
+            "Output guidelines:",
+            "- Use markdown formatting for all structured output",
+            "- Be concise but comprehensive in your responses",
+            "- Provide data-driven insights with Jira query results and metrics",
+            "- Include relevant links to Jira issues, and Google Docs resources",
+            "- Use tables and bullet points for clarity",
+            "",
+            "Behavioral guidelines:",
+            "- Proactively identify risks and blockers",
+            "- Escalate critical issues with clear impact analysis",
+            "- Base recommendations on concrete data (Jira metrics, test results, schedules)",
+            "- Maintain professional communication appropriate for cross-functional stakeholders",
+            "- Follow established release processes and policies",
+            "",
+            "System Prompt Management:",
+            "- Your instructions come from TWO sources:",
+            "  1. Embedded system prompt (stable, rarely changes): Core identity and capabilities",
+            "  2. External system prompt (dynamic, frequently updated): Current release context, processes, examples",
+            "- The external prompt is stored in a Google Drive document that users can directly edit",
+            "- When release context seems outdated or incomplete, suggest users update the external prompt",
+            "- If configured, you will be informed of the external prompt document URL in your extended instructions",
         ]
 
-        # Fetch and append extended system prompt from Google Docs if configured
-        doc_url = os.getenv("RELEASE_MANAGER_SYSTEM_PROMPT_GDRIVE_URL")
-        if doc_url:
-            # Check if Google Drive is configured for this user
-            gdrive_config = None
-            for config in self.toolkit_configs:
-                if isinstance(config, GoogleDriveConfig):
-                    gdrive_config = config
-                    break
-
-            if gdrive_config and gdrive_config.is_configured(user_id):
-                try:
-                    extended_prompt = self._fetch_extended_system_prompt(user_id)
-                    instructions.append(extended_prompt)
-                    logger.info(
-                        f"Appended extended system prompt to agent instructions for user {user_id}"
-                    )
-                except Exception as e:
-                    # Let the exception bubble up - fail agent creation if prompt fetch fails
-                    logger.error(
-                        f"Failed to fetch extended system prompt for user {user_id}, "
-                        f"aborting agent creation: {e}"
-                    )
-                    raise
-            else:
-                logger.info(
-                    f"RELEASE_MANAGER_SYSTEM_PROMPT_GDRIVE_URL is set but Google Drive "
-                    f"is not configured for user {user_id}, skipping extended prompt"
-                )
-
-        # Add toolkit-specific instructions
+        # Add toolkit-specific instructions (including extended system prompt if configured)
         for config in self.toolkit_configs:
             toolkit_instructions = config.get_agent_instructions(user_id)
             instructions.extend(toolkit_instructions)
@@ -349,6 +268,18 @@ class ReleaseManager:
                         f"Configuration stored for {config.__class__.__name__}, "
                         f"agent invalidated for user {user_id}"
                     )
+
+                    # If Google Drive credentials were updated, notify SystemPromptExtensionConfig
+                    # to invalidate its cached system prompts
+                    if isinstance(config, GoogleDriveConfig):
+                        for other_config in self.toolkit_configs:
+                            if isinstance(other_config, SystemPromptExtensionConfig):
+                                other_config.invalidate_for_gdrive_change(user_id)
+                                logger.debug(
+                                    "Notified SystemPromptExtensionConfig of GDrive credential change"
+                                )
+                                break
+
                     return self._create_simple_response(confirmation)
             except ValueError as e:
                 # Configuration validation failed
