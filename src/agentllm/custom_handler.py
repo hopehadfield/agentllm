@@ -1,7 +1,7 @@
 """Custom LiteLLM handler for Agno provider using dynamic registration."""
 
-import logging
 import os
+import sys
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
 from typing import Any
@@ -9,29 +9,33 @@ from typing import Any
 import litellm
 from litellm import CustomLLM
 from litellm.types.utils import Choices, Message, ModelResponse
+from loguru import logger
 
 from agentllm.agents.release_manager import ReleaseManager
 
-# Configure logging for our custom handler
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
+# Configure logging for our custom handler using loguru
+# Remove default handler
+logger.remove()
 
 # Determine log file path - use temp directory (consistent with DB and gdrive workspace)
 log_dir = os.getenv("AGENTLLM_DATA_DIR", "tmp")
 log_file = Path(log_dir) / "agno_handler.log"
 
-# File handler for detailed logs
-file_handler = logging.FileHandler(log_file)
-file_handler.setLevel(logging.DEBUG)
-file_handler.setFormatter(logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s"))
+# Add file handler for detailed logs (DEBUG level)
+logger.add(
+    log_file,
+    level="DEBUG",
+    format="{time:YYYY-MM-DD HH:mm:ss.SSS} | {level: <8} | {name}:{function}:{line} - {message}",
+    rotation="10 MB",
+    retention="7 days",
+)
 
-# Console handler for important logs only
-console_handler = logging.StreamHandler()
-console_handler.setLevel(logging.INFO)
-console_handler.setFormatter(logging.Formatter("[AGNO] %(levelname)s: %(message)s"))
-
-logger.addHandler(file_handler)
-logger.addHandler(console_handler)
+# Add console handler for important logs only (INFO level)
+logger.add(
+    sys.stderr,
+    level="INFO",
+    format="<green>{time:YYYY-MM-DD HH:mm:ss.SSS}</green> | <level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{function}</cyan> - <level>{message}</level>",
+)
 
 
 class AgnoCustomLLM(CustomLLM):
@@ -63,6 +67,7 @@ class AgnoCustomLLM(CustomLLM):
         Returns:
             Tuple of (session_id, user_id)
         """
+        logger.debug("_extract_session_info() called")
         session_id = None
         user_id = None
 
@@ -75,14 +80,15 @@ class AgnoCustomLLM(CustomLLM):
         if body_metadata:
             session_id = body_metadata.get("session_id") or body_metadata.get("chat_id")
             user_id = body_metadata.get("user_id")
-            logger.info(f"Found in body metadata: session_id={session_id}, user_id={user_id}")
+            logger.info(f"[1/4] Found in body metadata: session_id={session_id}, user_id={user_id}")
 
         # 2. Check OpenWebUI headers (ENABLE_FORWARD_USER_INFO_HEADERS)
         headers = litellm_params.get("metadata", {}).get("headers", {})
         if not session_id and headers:
             # Check for chat_id header (might be X-OpenWebUI-Chat-Id)
             session_id = headers.get("x-openwebui-chat-id") or headers.get("X-OpenWebUI-Chat-Id")
-            logger.info(f"Found in headers: session_id={session_id}")
+            if session_id:
+                logger.info(f"[2/4] Found in headers: session_id={session_id}")
 
         if not user_id and headers:
             # Check for user_id header
@@ -92,7 +98,8 @@ class AgnoCustomLLM(CustomLLM):
                 or headers.get("x-openwebui-user-email")
                 or headers.get("X-OpenWebUI-User-Email")
             )
-            logger.info(f"Found in headers: user_id={user_id}")
+            if user_id:
+                logger.info(f"[2/4] Found in headers: user_id={user_id}")
 
         # 3. Check LiteLLM metadata
         if not session_id and "litellm_params" in kwargs:
@@ -101,20 +108,20 @@ class AgnoCustomLLM(CustomLLM):
                 "conversation_id"
             )
             if session_id:
-                logger.info(f"Found in LiteLLM metadata: session_id={session_id}")
+                logger.info(f"[3/4] Found in LiteLLM metadata: session_id={session_id}")
 
         # 4. Fallback to user field
         if not user_id:
             user_id = kwargs.get("user")
             if user_id:
-                logger.info(f"Found in user field: user_id={user_id}")
+                logger.info(f"[4/4] Found in user field: user_id={user_id}")
 
         # Log what we're using
-        logger.info(f"Final extracted session info: user_id={user_id}, session_id={session_id}")
+        logger.info(f"✓ Final extracted session info: user_id={user_id}, session_id={session_id}")
 
         # Log full structure for debugging (only if nothing found)
         if not session_id and not user_id:
-            logger.warning("No session/user info found! Logging full request structure:")
+            logger.warning("⚠ No session/user info found! Logging full request structure:")
             logger.warning(f"Headers available: {list(headers.keys()) if headers else 'None'}")
             logger.warning(
                 f"Body metadata keys: {list(body_metadata.keys()) if body_metadata else 'None'}"
@@ -141,32 +148,41 @@ class AgnoCustomLLM(CustomLLM):
         Raises:
             Exception: If agent not found
         """
+        logger.debug(f"_get_agent() called with model={model}, user_id={user_id}")
+
         # Extract agent name from model (handle both "agno/release-manager" and "release-manager")
         agent_name = model.replace("agno/", "")
+        logger.debug(f"Extracted agent_name: {agent_name}")
 
         # Extract OpenAI parameters to pass to agent
         temperature = kwargs.get("temperature")
         max_tokens = kwargs.get("max_tokens")
+        logger.debug(f"Agent parameters: temperature={temperature}, max_tokens={max_tokens}")
 
         # Build cache key from agent configuration and user_id
         cache_key = (agent_name, temperature, max_tokens, user_id)
 
         # Check if agent exists in cache
         if cache_key in self._agent_cache:
-            logger.info(f"Using cached agent for key: {cache_key}")
+            logger.info(f"✓ Using CACHED agent for key: {cache_key}")
             return self._agent_cache[cache_key]
 
         # Create new agent and cache it
-        logger.info(f"Creating new agent for key: {cache_key}")
+        logger.info(f"✗ Cache MISS - Creating NEW agent for key: {cache_key}")
 
         # Instantiate the agent class based on agent_name
         if agent_name == "release-manager":
+            logger.debug("Instantiating ReleaseManager...")
             agent = ReleaseManager(temperature=temperature, max_tokens=max_tokens)
+            logger.debug("ReleaseManager instantiated successfully")
         else:
-            raise Exception(f"Agent '{agent_name}' not found. Only 'release-manager' is available.")
+            error_msg = f"Agent '{agent_name}' not found. Only 'release-manager' is available."
+            logger.error(error_msg)
+            raise Exception(error_msg)
 
         self._agent_cache[cache_key] = agent
-        logger.info(f"Cached agent. Total cached agents: {len(self._agent_cache)}")
+        logger.info(f"✓ Agent cached. Total cached agents: {len(self._agent_cache)}")
+        logger.debug(f"Cache keys: {list(self._agent_cache.keys())}")
         return agent
 
     def _build_response(self, model: str, content: str) -> ModelResponse:
@@ -179,6 +195,7 @@ class AgnoCustomLLM(CustomLLM):
         Returns:
             ModelResponse object
         """
+        logger.debug(f"_build_response() called for model={model}, content_length={len(content)}")
         message = Message(role="assistant", content=content)
         choice = Choices(finish_reason="stop", index=0, message=message)
 
@@ -191,6 +208,7 @@ class AgnoCustomLLM(CustomLLM):
             "total_tokens": 0,
         }
 
+        logger.debug("_build_response() completed successfully")
         return model_response
 
     def _extract_request_params(
@@ -205,8 +223,11 @@ class AgnoCustomLLM(CustomLLM):
         Returns:
             Tuple of (user_message, session_id, user_id)
         """
+        logger.debug("_extract_request_params() called")
         user_message = self._extract_user_message(messages)
+        logger.debug(f"Extracted user_message (length={len(user_message)})")
         session_id, user_id = self._extract_session_info(kwargs)
+        logger.debug(f"Extracted session_id={session_id}, user_id={user_id}")
         return user_message, session_id, user_id
 
     def completion(
@@ -229,13 +250,15 @@ class AgnoCustomLLM(CustomLLM):
         Returns:
             ModelResponse object
         """
-        logger.info(f"completion() called with model={model}")
+        logger.info("=" * 80)
+        logger.info(f">>> completion() STARTED - model={model}")
         logger.info(f"kwargs: {kwargs}")
         logger.info(f"messages: {messages}")
 
         # Check if streaming is requested
         stream = kwargs.get("stream", False)
         if stream:
+            logger.info("Streaming requested, delegating to streaming()")
             # Return streaming iterator
             return self.streaming(
                 model=model,
@@ -245,18 +268,30 @@ class AgnoCustomLLM(CustomLLM):
                 **kwargs,
             )
 
+        logger.info("Extracting request parameters...")
         # Extract request parameters first (need user_id for agent cache)
         user_message, session_id, user_id = self._extract_request_params(messages, kwargs)
+        logger.info(
+            f"Extracted: user_message_length={len(user_message)}, session_id={session_id}, user_id={user_id}"
+        )
 
+        logger.info("Getting agent instance...")
         # Get agent instance (with caching based on user_id)
         agent = self._get_agent(model, user_id=user_id, **kwargs)
 
+        logger.info(f"Running agent with session_id={session_id}, user_id={user_id}")
         # Run the agent with session management
         response = agent.run(user_message, stream=False, session_id=session_id, user_id=user_id)
+        logger.info(f"Agent run completed, response type: {type(response)}")
 
         # Extract content and build response
         content = response.content if hasattr(response, "content") else str(response)
-        return self._build_response(model, str(content))
+        logger.info(f"Extracted content length: {len(content)}")
+
+        result = self._build_response(model, str(content))
+        logger.info(f"<<< completion() FINISHED - model={model}")
+        logger.info("=" * 80)
+        return result
 
     def streaming(
         self,
@@ -282,6 +317,13 @@ class AgnoCustomLLM(CustomLLM):
         Yields:
             GenericStreamingChunk dictionary with text field
         """
+        logger.info("=" * 80)
+        logger.info(f">>> streaming() STARTED - model={model}")
+        logger.info(f"kwargs: {kwargs}")
+
+        logger.info(
+            "Getting complete response via completion() (sync streaming not fully supported)"
+        )
         # Get the complete response
         result = self.completion(
             model=model,
@@ -296,8 +338,9 @@ class AgnoCustomLLM(CustomLLM):
         if result.choices and len(result.choices) > 0:
             content = result.choices[0].message.content or ""
 
+        logger.info(f"Yielding single streaming chunk with content_length={len(content)}")
         # Return as GenericStreamingChunk format (required by CustomLLM interface)
-        yield {
+        chunk = {
             "text": content,
             "finish_reason": "stop",
             "index": 0,
@@ -311,6 +354,9 @@ class AgnoCustomLLM(CustomLLM):
                 "total_tokens": (result.usage.get("total_tokens", 0) if result.usage else 0),
             },
         }
+        yield chunk
+        logger.info(f"<<< streaming() FINISHED - model={model}")
+        logger.info("=" * 80)
 
     async def acompletion(
         self,
@@ -332,24 +378,37 @@ class AgnoCustomLLM(CustomLLM):
         Returns:
             ModelResponse object
         """
-        logger.info(f"acompletion() called with model={model}")
+        logger.info("=" * 80)
+        logger.info(f">>> acompletion() STARTED - model={model}")
         logger.info(f"kwargs: {kwargs}")
         logger.info(f"messages: {messages}")
 
+        logger.info("Extracting request parameters...")
         # Extract request parameters first (need user_id for agent cache)
         user_message, session_id, user_id = self._extract_request_params(messages, kwargs)
+        logger.info(
+            f"Extracted: user_message_length={len(user_message)}, session_id={session_id}, user_id={user_id}"
+        )
 
+        logger.info("Getting agent instance...")
         # Get agent instance (with caching based on user_id)
         agent = self._get_agent(model, user_id=user_id, **kwargs)
 
+        logger.info(f"Running agent asynchronously with session_id={session_id}, user_id={user_id}")
         # Run the agent asynchronously with session management
         response = await agent.arun(
             user_message, stream=False, session_id=session_id, user_id=user_id
         )
+        logger.info(f"Agent arun completed, response type: {type(response)}")
 
         # Extract content and build response
         content = response.content if hasattr(response, "content") else str(response)
-        return self._build_response(model, str(content))
+        logger.info(f"Extracted content length: {len(content)}")
+
+        result = self._build_response(model, str(content))
+        logger.info(f"<<< acompletion() FINISHED - model={model}")
+        logger.info("=" * 80)
+        return result
 
     async def astreaming(
         self,
@@ -371,28 +430,49 @@ class AgnoCustomLLM(CustomLLM):
         Yields:
             GenericStreamingChunk dictionaries with text field
         """
-        logger.info(f"astreaming() called with model={model}")
+        logger.info("=" * 80)
+        logger.info(f">>> astreaming() STARTED - model={model}")
         logger.info(f"kwargs: {kwargs}")
         logger.info(f"messages: {messages}")
 
+        logger.info("Extracting request parameters...")
         # Extract request parameters first (need user_id for agent cache)
         user_message, session_id, user_id = self._extract_request_params(messages, kwargs)
+        logger.info(
+            f"Extracted: user_message_length={len(user_message)}, session_id={session_id}, user_id={user_id}"
+        )
 
+        logger.info("Getting agent instance...")
         # Get agent instance (with caching based on user_id)
         agent = self._get_agent(model, user_id=user_id, **kwargs)
 
+        logger.info(f"Starting async streaming with session_id={session_id}, user_id={user_id}")
         # Use Agno's real async streaming with session management
         chunk_count = 0
 
-        async for chunk in agent.arun(
-            user_message, stream=True, session_id=session_id, user_id=user_id
-        ):
+        logger.info("Calling agent.arun() with stream=True...")
+        stream = agent.arun(user_message, stream=True, session_id=session_id, user_id=user_id)
+        logger.debug(f"agent.arun() returned stream type: {type(stream)}")
+
+        logger.info("Entering async for loop over ReleaseManager stream...")
+        async for chunk in stream:
+            chunk_count += 1
+            chunk_type = type(chunk).__name__
+
             # Extract content from chunk
             content = chunk.content if hasattr(chunk, "content") else str(chunk)
 
+            logger.debug(
+                f"[custom_handler] Received chunk #{chunk_count} from ReleaseManager: "
+                f"type={chunk_type}, content_length={len(content)}, "
+                f"has_content={bool(content)}"
+            )
+
             if not content:
+                logger.debug(f"Skipping empty chunk #{chunk_count}")
                 continue
 
+            logger.debug(f"Yielding chunk #{chunk_count} to LiteLLM, content_length={len(content)}")
             # Yield GenericStreamingChunk format
             yield {
                 "text": content,
@@ -406,8 +486,12 @@ class AgnoCustomLLM(CustomLLM):
                     "total_tokens": 0,
                 },
             }
-            chunk_count += 1
+            logger.debug(f"Chunk #{chunk_count} yielded to LiteLLM successfully")
 
+        logger.info(
+            f"async for loop over ReleaseManager stream completed, total chunks: {chunk_count}"
+        )
+        logger.info("Sending final chunk with finish_reason=stop")
         # Send final chunk with finish_reason
         yield {
             "text": "",
@@ -421,6 +505,8 @@ class AgnoCustomLLM(CustomLLM):
                 "total_tokens": chunk_count,
             },
         }
+        logger.info(f"<<< astreaming() FINISHED - model={model}")
+        logger.info("=" * 80)
 
     def _extract_user_message(self, messages: list[dict[str, Any]]) -> str:
         """Extract the last user message from messages list.
@@ -431,13 +517,22 @@ class AgnoCustomLLM(CustomLLM):
         Returns:
             User message content
         """
+        logger.debug(f"_extract_user_message() called with {len(messages)} messages")
+
         # Find the last user message
-        for message in reversed(messages):
+        for idx, message in enumerate(reversed(messages)):
             if message.get("role") == "user":
-                return message.get("content", "")
+                content = message.get("content", "")
+                logger.debug(
+                    f"Found user message at position {len(messages) - idx - 1} (length={len(content)})"
+                )
+                return content
 
         # If no user message found, concatenate all messages
-        return " ".join(msg.get("content", "") for msg in messages)
+        logger.warning("No user message found, concatenating all messages")
+        combined = " ".join(msg.get("content", "") for msg in messages)
+        logger.debug(f"Combined message length: {len(combined)}")
+        return combined
 
     # Note: _add_messages_to_agent() method removed
     # Agno now handles conversation history automatically via:

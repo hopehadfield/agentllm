@@ -1,5 +1,6 @@
 """Release Manager agent for managing software releases and changelogs."""
 
+import asyncio
 import os
 from pathlib import Path
 from typing import Any
@@ -100,8 +101,11 @@ class ReleaseManager:
             user_id: User identifier
         """
         if user_id in self._agents:
-            logger.info(f"Invalidating cached agent for user {user_id}")
+            logger.info(f"⚠ Invalidating cached agent for user {user_id}")
             del self._agents[user_id]
+            logger.debug(f"Agent removed from cache. Remaining cached agents: {len(self._agents)}")
+        else:
+            logger.debug(f"No cached agent found for user {user_id} (nothing to invalidate)")
 
     def _check_and_invalidate_agent(self, config_name: str, user_id: str) -> None:
         """Check if config requires agent recreation and invalidate if needed.
@@ -128,29 +132,39 @@ class ReleaseManager:
         Returns:
             The Agno agent instance for this user
         """
+        logger.debug(f"_get_or_create_agent() called for user_id={user_id}")
+
         # Return existing agent for this user if available
         if user_id in self._agents:
+            logger.info(f"✓ Using CACHED agent for user {user_id}")
             return self._agents[user_id]
 
         # Create the agent for this user
+        logger.info(f"✗ Cache MISS - Creating NEW agent for user {user_id}")
+        logger.debug("Building model parameters...")
         model_params = {"id": "gemini-2.5-flash"}
         if self._temperature is not None:
             model_params["temperature"] = self._temperature
         if self._max_tokens is not None:
             model_params["max_tokens"] = self._max_tokens
         model_params.update(self._model_kwargs)
+        logger.debug(f"Model params: {model_params}")
 
         # Collect all configured toolkits for this user
+        logger.debug("Collecting configured toolkits...")
         tools = []
         for config in self.toolkit_configs:
             toolkit = config.get_toolkit(user_id)
             if toolkit:
                 tools.append(toolkit)
                 logger.info(
-                    f"Adding {config.__class__.__name__} toolkit to agent for user {user_id}"
+                    f"  ✓ Adding {config.__class__.__name__} toolkit to agent for user {user_id}"
                 )
 
+        logger.debug(f"Total tools collected: {len(tools)}")
+
         # Create base instructions
+        logger.debug("Building base instructions...")
         instructions = [
             "You are the Release Manager for Red Hat Developer Hub (RHDH).",
             "Your core responsibilities include:",
@@ -189,9 +203,17 @@ class ReleaseManager:
         ]
 
         # Add toolkit-specific instructions (including extended system prompt if configured)
+        logger.debug("Adding toolkit-specific instructions...")
         for config in self.toolkit_configs:
             toolkit_instructions = config.get_agent_instructions(user_id)
+            if toolkit_instructions:
+                logger.debug(
+                    f"  + {config.__class__.__name__} added {len(toolkit_instructions)} instruction lines"
+                )
             instructions.extend(toolkit_instructions)
+
+        logger.debug(f"Total instruction lines: {len(instructions)}")
+        logger.debug("Creating Agno Agent instance...")
 
         agent = Agent(
             name="release-manager",
@@ -207,9 +229,14 @@ class ReleaseManager:
             read_chat_history=True,  # Allow agent to read full history
         )
 
+        logger.debug("Agno Agent instance created successfully")
+
         # Cache the agent for this user
         self._agents[user_id] = agent
-        logger.info(f"Created agent for user {user_id} with {len(tools)} tools")
+        logger.info(
+            f"✓ Created and cached agent for user {user_id} with {len(tools)} tools. "
+            f"Total cached agents: {len(self._agents)}"
+        )
 
         return agent
 
@@ -251,12 +278,16 @@ class ReleaseManager:
         Returns:
             Response with configuration message, or None if no config handling needed
         """
+        logger.debug(f"_handle_configuration() called for user_id={user_id}")
+
         if not user_id:
+            logger.debug("No user_id provided, skipping configuration handling")
             return None
 
         # FIRST: Try to extract and store configuration from message
         # This must happen before checking required configs, so that if the user
         # provides config (e.g., OAuth code), it gets stored before we check again
+        logger.debug("[1/3] Checking for configuration in user message...")
         for config in self.toolkit_configs:
             try:
                 confirmation = config.extract_and_store_config(message, user_id)
@@ -265,7 +296,7 @@ class ReleaseManager:
                     # Invalidate agent so it's recreated with new tools
                     self._invalidate_agent(user_id)
                     logger.info(
-                        f"Configuration stored for {config.__class__.__name__}, "
+                        f"✓ Configuration stored for {config.__class__.__name__}, "
                         f"agent invalidated for user {user_id}"
                     )
 
@@ -288,33 +319,39 @@ class ReleaseManager:
                     "Please check your credentials and try again."
                 )
                 logger.warning(
-                    f"Configuration validation failed for "
+                    f"⚠ Configuration validation failed for "
                     f"{config.__class__.__name__}, user {user_id}: {e}"
                 )
                 return self._create_simple_response(error_msg)
 
         # SECOND: Check if any REQUIRED toolkit is not configured
         # This happens after extraction, so if user provided config above, it's already stored
+        logger.debug("[2/3] Checking required toolkit configurations...")
         for config in self.toolkit_configs:
             if config.is_required() and not config.is_configured(user_id):
                 # Required toolkit not configured - prompt user
                 prompt = config.get_config_prompt(user_id)
                 if prompt:
                     logger.info(
-                        f"User {user_id} needs to configure required toolkit: "
+                        f"⚠ User {user_id} needs to configure required toolkit: "
                         f"{config.__class__.__name__}"
                     )
                     return self._create_simple_response(prompt)
 
         # THIRD: Check if any OPTIONAL toolkit detects an authorization request
         # (e.g., user mentions the toolkit but hasn't authorized yet)
+        logger.debug("[3/3] Checking optional toolkit authorization requests...")
         for config in self.toolkit_configs:
             if not config.is_required():
                 auth_prompt = config.check_authorization_request(message, user_id)
                 if auth_prompt:
+                    logger.info(
+                        f"Optional toolkit {config.__class__.__name__} detected authorization request"
+                    )
                     return self._create_simple_response(auth_prompt)
 
         # No configuration handling needed, proceed to agent
+        logger.debug("✓ All configuration checks passed, proceeding to agent")
         return None
 
     def run(self, message: str, user_id: str | None = None, **kwargs) -> Any:
@@ -333,82 +370,211 @@ class ReleaseManager:
         Returns:
             RunResponse from agent or configuration prompt
         """
+        logger.info("=" * 80)
+        logger.info(f">>> ReleaseManager.run() STARTED - user_id={user_id}")
+        logger.info(f"Message length: {len(message)}, kwargs: {kwargs}")
+
         # Check configuration and handle if needed
+        logger.info("Checking configuration...")
         config_response = self._handle_configuration(message, user_id)
 
         # If config_response is not None, user needs to configure
         if config_response is not None:
+            logger.info("Configuration handling returned response, returning to user")
+            logger.info("<<< ReleaseManager.run() FINISHED (config response)")
+            logger.info("=" * 80)
             return config_response
 
         # User is configured, get/create agent and run it
         if not user_id:
             error_msg = "❌ User ID is required to create an agent."
             logger.error("Cannot create agent: user_id is None")
+            logger.info("<<< ReleaseManager.run() FINISHED (error)")
+            logger.info("=" * 80)
             return self._create_simple_response(error_msg)
 
         try:
+            logger.info(f"Getting or creating agent for user {user_id}...")
             agent = self._get_or_create_agent(user_id)
-            return agent.run(message, user_id=user_id, **kwargs)
+            logger.info(f"Running agent.run() for user {user_id}...")
+            result = agent.run(message, user_id=user_id, **kwargs)
+            logger.info(f"Agent.run() completed, result type: {type(result)}")
+            logger.info("<<< ReleaseManager.run() FINISHED (success)")
+            logger.info("=" * 80)
+            return result
         except Exception as e:
             # Agent creation or execution failed
             error_msg = f"❌ Error: {str(e)}"
-            logger.error(f"Failed to run agent for user {user_id}: {e}")
+            logger.error(f"Failed to run agent for user {user_id}: {e}", exc_info=True)
+            logger.info("<<< ReleaseManager.run() FINISHED (exception)")
+            logger.info("=" * 80)
             return self._create_simple_response(error_msg)
 
     async def _arun_non_streaming(self, message: str, user_id: str | None = None, **kwargs):
         """Internal async method for non-streaming mode."""
+        logger.info("=" * 80)
+        logger.info(f">>> ReleaseManager._arun_non_streaming() STARTED - user_id={user_id}")
+        logger.info(f"Message length: {len(message)}, kwargs: {kwargs}")
+
         # Check configuration and handle if needed
+        logger.info("Checking configuration...")
         config_response = self._handle_configuration(message, user_id)
 
         if config_response is not None:
+            logger.info("Configuration handling returned response, returning to user")
+            logger.info("<<< ReleaseManager._arun_non_streaming() FINISHED (config response)")
+            logger.info("=" * 80)
             return config_response
 
         if not user_id:
             error_msg = "❌ User ID is required to create an agent."
             logger.error("Cannot create agent: user_id is None")
+            logger.info("<<< ReleaseManager._arun_non_streaming() FINISHED (error)")
+            logger.info("=" * 80)
             return self._create_simple_response(error_msg)
 
         try:
+            logger.info(f"Getting or creating agent for user {user_id}...")
             agent = self._get_or_create_agent(user_id)
-            return await agent.arun(message, user_id=user_id, **kwargs)
+            logger.info(f"Running agent.arun() for user {user_id} (non-streaming)...")
+            result = await agent.arun(message, user_id=user_id, **kwargs)
+            logger.info(f"Agent.arun() completed, result type: {type(result)}")
+            logger.info("<<< ReleaseManager._arun_non_streaming() FINISHED (success)")
+            logger.info("=" * 80)
+            return result
         except Exception as e:
             # Agent creation or execution failed
             error_msg = f"❌ Error: {str(e)}"
-            logger.error(f"Failed to run agent for user {user_id}: {e}")
+            logger.error(f"Failed to run agent for user {user_id}: {e}", exc_info=True)
+            logger.info("<<< ReleaseManager._arun_non_streaming() FINISHED (exception)")
+            logger.info("=" * 80)
             return self._create_simple_response(error_msg)
 
     async def _arun_streaming(self, message: str, user_id: str | None = None, **kwargs):
         """Internal async generator for streaming mode."""
+        logger.info("=" * 80)
+        logger.info(f">>> ReleaseManager._arun_streaming() STARTED - user_id={user_id}")
+        logger.info(f"Message length: {len(message)}, kwargs: {kwargs}")
+
         # Check configuration and handle if needed
+        logger.info("Checking configuration...")
         config_response = self._handle_configuration(message, user_id)
 
         if config_response is not None:
+            logger.info("Configuration handling returned response, yielding to user")
             content = (
                 config_response.content
                 if hasattr(config_response, "content")
                 else str(config_response)
             )
             yield content
+            logger.info("<<< ReleaseManager._arun_streaming() FINISHED (config response)")
+            logger.info("=" * 80)
             return
 
         if not user_id:
             error_msg = "❌ User ID is required to create an agent."
             logger.error("Cannot create agent: user_id is None")
             yield error_msg
+            logger.info("<<< ReleaseManager._arun_streaming() FINISHED (error)")
+            logger.info("=" * 80)
             return
 
         try:
+            logger.info(f"Getting or creating agent for user {user_id}...")
             agent = self._get_or_create_agent(user_id)
+
+            logger.info(f"Starting agent.arun() streaming for user {user_id}...")
+            chunk_count = 0
+            stream_complete = False
 
             # When streaming, agent.arun() returns an async generator directly
             # Don't await it, just iterate over it
-            async for chunk in agent.arun(message, user_id=user_id, **kwargs):
-                yield chunk
+            logger.info("Entering async for loop over agent.arun()...")
+
+            # Get the async generator from agent.arun()
+            stream = agent.arun(message, user_id=user_id, **kwargs)
+            logger.debug(f"Stream type: {type(stream)}")
+
+            # Timeout for waiting for next chunk (prevents infinite hang)
+            CHUNK_TIMEOUT = 5.0  # 5 seconds between chunks is reasonable
+
+            try:
+                while not stream_complete:
+                    try:
+                        # Wait for next chunk with timeout
+                        logger.debug(
+                            f"Waiting for chunk #{chunk_count + 1} (timeout={CHUNK_TIMEOUT}s)..."
+                        )
+                        chunk = await asyncio.wait_for(stream.__anext__(), timeout=CHUNK_TIMEOUT)
+                        chunk_count += 1
+
+                        chunk_type = type(chunk).__name__
+                        chunk_content = getattr(chunk, "content", None)
+                        chunk_event = getattr(chunk, "event", None)
+
+                        # Check for various completion signals
+                        is_done = getattr(chunk, "is_done", False)
+                        event_type = getattr(chunk, "event_type", None)
+
+                        logger.info(
+                            f"Chunk #{chunk_count}: type={chunk_type}, "
+                            f"event={chunk_event}, "
+                            f"event_type={event_type}, "
+                            f"is_done={is_done}, "
+                            f"content_length={len(chunk_content) if chunk_content else 0}"
+                        )
+
+                        # Log all chunk attributes for deep investigation
+                        if hasattr(chunk, "__dict__"):
+                            logger.debug(f"Chunk #{chunk_count} attributes: {vars(chunk)}")
+                        else:
+                            logger.debug(f"Chunk #{chunk_count} dir: {dir(chunk)}")
+
+                        # Yield the chunk to upstream consumer
+                        yield chunk
+                        logger.debug(f"Chunk #{chunk_count} yielded successfully")
+
+                        # Check for explicit completion signals
+                        if is_done:
+                            logger.info("Stream completion detected via is_done=True")
+                            stream_complete = True
+                            break
+
+                        if chunk_event in ("run_completed", "stream_end", "done"):
+                            logger.info(f"Stream completion detected via event={chunk_event}")
+                            stream_complete = True
+                            break
+
+                    except StopAsyncIteration:
+                        # Natural stream end
+                        logger.info("Stream ended naturally (StopAsyncIteration)")
+                        stream_complete = True
+                        break
+
+                    except TimeoutError:
+                        # Timeout waiting for next chunk - assume stream is complete
+                        logger.warning(
+                            f"Timeout waiting for chunk #{chunk_count + 1} after {CHUNK_TIMEOUT}s. "
+                            f"Assuming stream is complete. Last chunk was #{chunk_count}"
+                        )
+                        stream_complete = True
+                        break
+
+            except Exception as e:
+                logger.error(f"Error during stream iteration: {e}", exc_info=True)
+                raise
+
+            logger.info(f"Stream iteration complete, total chunks yielded: {chunk_count}")
+            logger.info("<<< ReleaseManager._arun_streaming() FINISHED (success)")
+            logger.info("=" * 80)
         except Exception as e:
             # Agent creation or execution failed
             error_msg = f"❌ Error: {str(e)}"
-            logger.error(f"Failed to run agent for user {user_id}: {e}")
+            logger.error(f"Failed to run agent for user {user_id}: {e}", exc_info=True)
             yield error_msg
+            logger.info("<<< ReleaseManager._arun_streaming() FINISHED (exception)")
+            logger.info("=" * 80)
 
     def arun(self, message: str, user_id: str | None = None, **kwargs):
         """Async version of run() with same configuration management logic.
@@ -425,10 +591,15 @@ class ReleaseManager:
             Coroutine (non-streaming) or AsyncGenerator (streaming)
         """
         stream = kwargs.get("stream", False)
+        logger.info("=" * 80)
+        logger.info(f">>> ReleaseManager.arun() called - user_id={user_id}, stream={stream}")
+        logger.info(f"Message length: {len(message)}, kwargs: {kwargs}")
 
         if stream:
             # Return async generator for streaming
+            logger.info("Delegating to _arun_streaming()")
             return self._arun_streaming(message, user_id=user_id, **kwargs)
         else:
             # Return coroutine for non-streaming
+            logger.info("Delegating to _arun_non_streaming()")
             return self._arun_non_streaming(message, user_id=user_id, **kwargs)
