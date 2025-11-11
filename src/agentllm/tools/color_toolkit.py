@@ -59,10 +59,25 @@ class ColorTools(Toolkit):
             "brown": ["orange", "red"],
         }
 
+        # Color mood mappings for intelligent scheme design
+        self._color_moods = {
+            "red": {"energy": 9, "warmth": 8, "calm": 2, "professional": 5, "creativity": 7},
+            "blue": {"energy": 3, "warmth": 2, "calm": 9, "professional": 9, "creativity": 6},
+            "green": {"energy": 5, "warmth": 4, "calm": 8, "professional": 7, "creativity": 5},
+            "yellow": {"energy": 8, "warmth": 9, "calm": 3, "professional": 4, "creativity": 9},
+            "purple": {"energy": 6, "warmth": 5, "calm": 6, "professional": 6, "creativity": 9},
+            "orange": {"energy": 9, "warmth": 9, "calm": 2, "professional": 4, "creativity": 8},
+            "pink": {"energy": 6, "warmth": 7, "calm": 5, "professional": 4, "creativity": 8},
+            "black": {"energy": 4, "warmth": 1, "calm": 5, "professional": 10, "creativity": 5},
+            "white": {"energy": 5, "warmth": 3, "calm": 7, "professional": 8, "creativity": 6},
+            "brown": {"energy": 3, "warmth": 6, "calm": 6, "professional": 7, "creativity": 4},
+        }
+
         # Build tools list
         tools = [
             self.generate_color_palette,
             self.format_text_with_theme,
+            self.design_color_scheme_for_purpose,
         ]
 
         # Initialize parent Toolkit with tools
@@ -238,5 +253,173 @@ class ColorTools(Toolkit):
             error_msg = f"Failed to format text: {str(e)}"
             logger.error(error_msg, exc_info=True)
             logger.info("<<< format_text_with_theme() FINISHED (exception)")
+            logger.debug("=" * 80)
+            return f"❌ Error: {error_msg}"
+
+    def design_color_scheme_for_purpose(self, purpose: str) -> str:
+        """
+        Design a complete color scheme for a specific purpose or context.
+
+        This tool demonstrates complex reasoning by:
+        - Analyzing the purpose and extracting key requirements (mood, tone, context)
+        - Evaluating multiple color options based on color psychology
+        - Considering the user's favorite color preference
+        - Making trade-offs between aesthetics, psychology, and purpose
+        - Providing detailed reasoning for recommendations
+
+        This tool is intentionally complex to trigger the agent's reasoning capabilities,
+        showcasing step-by-step thinking and decision-making processes.
+
+        Args:
+            purpose: Description of the purpose or context (e.g., "calming meditation app",
+                    "energetic sports brand", "professional corporate website",
+                    "creative design portfolio", "welcoming restaurant")
+
+        Returns:
+            Detailed color scheme recommendation with reasoning
+        """
+        logger.debug("=" * 80)
+        logger.info(">>> design_color_scheme_for_purpose() called")
+        logger.info(f"Parameters: purpose='{purpose}', favorite_color={self.favorite_color}")
+
+        try:
+            # This tool is designed to be complex enough to trigger reasoning
+            # The agent should think through:
+            # 1. What mood/tone does this purpose require?
+            # 2. Which colors match those requirements?
+            # 3. How can we incorporate the user's favorite color?
+            # 4. What are the trade-offs between different options?
+            # 5. What is the optimal recommendation?
+
+            # Extract keywords to determine mood requirements
+            purpose_lower = purpose.lower()
+
+            # Determine required mood characteristics
+            requires_energy = any(
+                word in purpose_lower for word in ["energy", "energetic", "active", "sport", "dynamic", "vibrant", "exciting"]
+            )
+            requires_calm = any(
+                word in purpose_lower for word in ["calm", "calming", "meditation", "relax", "peaceful", "tranquil", "serene"]
+            )
+            requires_warmth = any(word in purpose_lower for word in ["warm", "welcoming", "friendly", "cozy", "inviting", "comfortable"])
+            requires_professional = any(
+                word in purpose_lower for word in ["professional", "corporate", "business", "formal", "executive", "official"]
+            )
+            requires_creativity = any(
+                word in purpose_lower for word in ["creative", "artistic", "design", "innovative", "imaginative", "expressive"]
+            )
+
+            logger.debug(
+                f"Mood analysis: energy={requires_energy}, calm={requires_calm}, warmth={requires_warmth}, professional={requires_professional}, creativity={requires_creativity}"
+            )
+
+            # Build mood profile
+            mood_profile = {
+                "energy": requires_energy,
+                "warmth": requires_warmth,
+                "calm": requires_calm,
+                "professional": requires_professional,
+                "creativity": requires_creativity,
+            }
+
+            # Evaluate how well the favorite color matches the requirements
+            favorite_scores = self._color_moods.get(self.favorite_color, {})
+
+            # Calculate overall match score for favorite color
+            favorite_match_score = sum(
+                score
+                for mood, required in mood_profile.items()
+                if required and mood in favorite_scores
+                for score in [favorite_scores[mood]]
+            )
+
+            # Find best alternative colors for comparison
+            best_alternatives = []
+            for color, scores in self._color_moods.items():
+                if color == self.favorite_color:
+                    continue
+                match_score = sum(
+                    score for mood, required in mood_profile.items() if required and mood in scores for score in [scores[mood]]
+                )
+                best_alternatives.append((color, match_score))
+
+            best_alternatives.sort(key=lambda x: x[1], reverse=True)
+            top_alternative = best_alternatives[0] if best_alternatives else (None, 0)
+
+            logger.debug(f"Favorite color match score: {favorite_match_score}")
+            logger.debug(f"Top alternative: {top_alternative[0]} with score {top_alternative[1]}")
+
+            # Build color scheme recommendation
+            # Primary color: use favorite if it's a reasonable match, otherwise use best alternative
+            use_favorite_as_primary = favorite_match_score >= (top_alternative[1] * 0.7)  # Within 70% of best
+
+            if use_favorite_as_primary:
+                primary_color = self.favorite_color
+                primary_reasoning = f"Your favorite color ({self.favorite_color}) is a good match for this purpose."
+            else:
+                primary_color = top_alternative[0]
+                primary_reasoning = (
+                    f"While {self.favorite_color} is your favorite, {primary_color} better matches the '{purpose}' requirements."
+                )
+
+            # Supporting colors: build a harmonious palette
+            if use_favorite_as_primary:
+                # Use analogous colors of favorite
+                supporting = self._analogous_colors.get(self.favorite_color, ["gray", "silver"])[:1]
+                accent = self._complementary_colors.get(self.favorite_color, "gray")
+            else:
+                # Include favorite as accent to honor preference
+                supporting = [self.favorite_color]
+                accent = self._complementary_colors.get(primary_color, "gray")
+
+            # Build detailed response
+            response = f"""**Color Scheme Design for: "{purpose}"**
+
+🎨 **Recommended Color Scheme:**
+
+**Primary Color:** {primary_color.title()}
+- Role: Main brand/theme color
+- Reasoning: {primary_reasoning}
+
+**Supporting Color(s):** {", ".join([c.title() for c in supporting])}
+- Role: Secondary elements, backgrounds, UI components
+- Reasoning: These colors harmonize with {primary_color} and provide visual variety
+
+**Accent Color:** {accent.title()}
+- Role: Call-to-action buttons, highlights, important elements
+- Reasoning: Creates contrast and draws attention when needed
+
+---
+
+📊 **Analysis of Your Favorite Color ({self.favorite_color.title()}):**
+
+"""
+
+            # Add mood analysis for favorite color
+            if self.favorite_color in self._color_moods:
+                scores = self._color_moods[self.favorite_color]
+                response += "Mood Characteristics (1-10 scale):\n"
+                for mood, score in scores.items():
+                    bar = "█" * score + "░" * (10 - score)
+                    response += f"- {mood.title()}: {bar} ({score}/10)\n"
+
+            # Add recommendation on usage
+            response += "\n---\n\n💡 **Usage Recommendation:**\n\n"
+
+            if use_favorite_as_primary:
+                response += f"Great news! Your favorite color works well for this purpose. Use {primary_color} as the dominant color (60% of design), {supporting[0] if supporting else 'neutral tones'} for supporting elements (30%), and {accent} for accents (10%)."
+            else:
+                response += f"For optimal impact, use {primary_color} as the primary color, but incorporate {self.favorite_color} as a supporting or accent color to maintain your personal preference. This balances purpose-fit with personal taste."
+
+            logger.info("✅ Successfully designed color scheme")
+            logger.info("<<< design_color_scheme_for_purpose() FINISHED (success)")
+            logger.debug("=" * 80)
+
+            return response
+
+        except Exception as e:
+            error_msg = f"Failed to design color scheme: {str(e)}"
+            logger.error(error_msg, exc_info=True)
+            logger.info("<<< design_color_scheme_for_purpose() FINISHED (exception)")
             logger.debug("=" * 80)
             return f"❌ Error: {error_msg}"
