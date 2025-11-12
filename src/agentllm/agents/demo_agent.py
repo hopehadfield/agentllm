@@ -222,3 +222,6 @@ class DemoAgent(BaseAgentWrapper):
         # in the response content as formatted <details> blocks.
 
         return kwargs
+
+    def _on_config_stored(self, config: BaseToolkitConfig, user_id: str) -> None:
+        pass

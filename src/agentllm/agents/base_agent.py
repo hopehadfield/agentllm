@@ -3,7 +3,6 @@
 import json
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
-from re import X
 from typing import Any
 
 from agno.agent import (
@@ -478,7 +477,8 @@ class BaseAgentWrapper(ABC):
         else:
             logger.debug("NOT using constructor session IDs (Use Case 2 - pass on each run() call)")
 
-        logger.debug(f"Final agent kwargs: {list(agent_kwargs.keys())}")
+        agent_kwargs["add_datetime_to_context"] = True
+        logger.info(f"Final agent kwargs: {list(agent_kwargs.keys())}")
         return agent_kwargs
 
     def _create_agent_instance(
@@ -575,7 +575,13 @@ class BaseAgentWrapper(ABC):
 
         return agent
 
-    def run(self, message: str, user_id: str | None = None, session_id: str | None = None, **kwargs) -> Any:
+    def run(
+        self,
+        message: str,
+        user_id: str | None = None,
+        session_id: str | None = None,
+        **kwargs,
+    ) -> Any:
         """
         Run the agent with configuration management (synchronous).
 
@@ -637,7 +643,13 @@ class BaseAgentWrapper(ABC):
             logger.info("=" * 80)
             return self._create_simple_response(error_msg)
 
-    async def _arun_non_streaming(self, message: str, user_id: str | None = None, session_id: str | None = None, **kwargs):
+    async def _arun_non_streaming(
+        self,
+        message: str,
+        user_id: str | None = None,
+        session_id: str | None = None,
+        **kwargs,
+    ):
         """Internal async method for non-streaming mode."""
         logger.info("=" * 80)
         logger.info(f">>> {self.__class__.__name__}._arun_non_streaming() STARTED - user_id={user_id}, session_id={session_id}")
@@ -668,7 +680,13 @@ class BaseAgentWrapper(ABC):
             effective_session_id = session_id if session_id is not None else self._session_id
 
             logger.info(f"Running agent.arun() for user {user_id}, session {effective_session_id} (non-streaming)...")
-            result = await agent.arun(message, user_id=user_id, session_id=effective_session_id, stream=False, **kwargs)
+            result = await agent.arun(
+                message,
+                user_id=user_id,
+                session_id=effective_session_id,
+                stream=False,
+                **kwargs,
+            )
             logger.info(f"✅ Agent.arun() completed, result type: {type(result)}")
             logger.info(f"<<< {self.__class__.__name__}._arun_non_streaming() FINISHED (success)")
             logger.info("=" * 80)
@@ -681,7 +699,13 @@ class BaseAgentWrapper(ABC):
             logger.info("=" * 80)
             return self._create_simple_response(error_msg)
 
-    async def _arun_streaming(self, message: str, user_id: str | None = None, session_id: str | None = None, **kwargs) -> AsyncIterator[dict[str, Any]]:
+    async def _arun_streaming(
+        self,
+        message: str,
+        user_id: str | None = None,
+        session_id: str | None = None,
+        **kwargs,
+    ) -> AsyncIterator[dict[str, Any]]:
         """
         Internal async generator for streaming mode.
 
@@ -1036,7 +1060,14 @@ class BaseAgentWrapper(ABC):
             logger.info(f"<<< {self.__class__.__name__}._arun_streaming() FINISHED (exception)")
             logger.info("=" * 80)
 
-    def arun(self, message: str, user_id: str | None = None, session_id: str | None = None, stream: bool = False, **kwargs):
+    def arun(
+        self,
+        message: str,
+        user_id: str | None = None,
+        session_id: str | None = None,
+        stream: bool = False,
+        **kwargs,
+    ):
         """
         Run the agent asynchronously with configuration management.
 
