@@ -6,6 +6,34 @@ import nox
 nox.options.default_venv_backend = "none"
 
 
+def _get_compose_command():
+    """Detect and return compose command (docker or podman).
+
+    Auto-detects whether to use 'podman compose' or 'docker compose' based on
+    what's available on the system. Prefers podman if both are available.
+
+    Returns:
+        list: Command parts like ["podman", "compose"] or ["docker", "compose"]
+    """
+    import subprocess
+
+    # Check if podman compose is available
+    try:
+        result = subprocess.run(
+            ["podman", "compose", "version"],
+            capture_output=True,
+            stderr=subprocess.DEVNULL,
+            timeout=2,
+        )
+        if result.returncode == 0:
+            return ["podman", "compose"]
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    # Fall back to docker compose
+    return ["docker", "compose"]
+
+
 @nox.session(venv_backend="none")
 def test(session):
     """Run unit tests with pytest."""
@@ -182,7 +210,8 @@ def dev(session):
 
     _check_env()
 
-    args = ["docker", "compose", "up"]
+    compose = _get_compose_command()
+    args = [*compose, "up"]
 
     # Parse session arguments
     if session.posargs:
@@ -198,7 +227,7 @@ def dev(session):
         session.run(*args, external=True)
     except KeyboardInterrupt:
         print("\n\n⏹️  Stopping containers...")
-        session.run("docker", "compose", "down", external=True)
+        session.run(*compose, "down", external=True)
         sys.exit(0)
 
 
@@ -207,8 +236,9 @@ def dev_build(session):
     """Build and start development environment (forces rebuild)."""
     _check_env()
 
+    compose = _get_compose_command()
     print("🔨 Building and starting development environment...")
-    session.run("docker", "compose", "up", "--build", external=True)
+    session.run(*compose, "up", "--build", external=True)
 
 
 @nox.session(venv_backend="none")
@@ -252,7 +282,8 @@ def dev_local_proxy(session):
 
     print("🚀 Starting Open WebUI (will connect to local proxy)...\n")
 
-    args = ["docker", "compose", "up", "open-webui"]
+    compose = _get_compose_command()
+    args = [*compose, "up", "open-webui"]
 
     # Parse session arguments
     if session.posargs:
@@ -263,7 +294,7 @@ def dev_local_proxy(session):
         session.run(*args, external=True)
     except KeyboardInterrupt:
         print("\n\n⏹️  Stopping Open WebUI...")
-        session.run("docker", "compose", "stop", "open-webui", external=True)
+        session.run(*compose, "stop", "open-webui", external=True)
         sys.exit(0)
 
 
@@ -283,11 +314,13 @@ def dev_full(session):
 
     _check_env()
 
+    compose = _get_compose_command()
+
     # Override OPENAI_API_BASE_URL to use container name
     env = os.environ.copy()
     env["OPENAI_API_BASE_URL"] = "http://litellm-proxy:8890/v1"
 
-    args = ["docker", "compose", "up"]
+    args = [*compose, "up"]
 
     # Parse session arguments
     if session.posargs:
@@ -304,7 +337,7 @@ def dev_full(session):
         session.run(*args, external=True, env=env)
     except KeyboardInterrupt:
         print("\n\n⏹️  Stopping containers...")
-        session.run("docker", "compose", "down", external=True)
+        session.run(*compose, "down", external=True)
         sys.exit(0)
 
 
@@ -316,8 +349,10 @@ def dev_detach(session):
 
     _check_env()
 
+    compose = _get_compose_command()
+
     print("🚀 Starting development environment in background...")
-    session.run("docker", "compose", "up", "-d", external=True)
+    session.run(*compose, "up", "-d", external=True)
 
     print("\n⏳ Waiting for services to be healthy...")
 
@@ -327,7 +362,7 @@ def dev_detach(session):
     healthy = False
 
     while waited < max_wait:
-        result = subprocess.run(["docker", "compose", "ps"], capture_output=True, text=True)
+        result = subprocess.run([*compose, "ps"], capture_output=True, text=True)
         if "litellm-proxy" in result.stdout and "healthy" in result.stdout:
             healthy = True
             break
@@ -363,7 +398,8 @@ def dev_logs(session):
         nox -s dev-logs                    # All services
         nox -s dev-logs -- litellm-proxy   # Specific service
     """
-    args = ["docker", "compose", "logs", "-f"]
+    compose = _get_compose_command()
+    args = [*compose, "logs", "-f"]
 
     if session.posargs:
         args.extend(session.posargs)
@@ -375,8 +411,9 @@ def dev_logs(session):
 @nox.session(venv_backend="none")
 def dev_stop(session):
     """Stop development containers (preserves data)."""
+    compose = _get_compose_command()
     print("⏹️  Stopping development containers...")
-    session.run("docker", "compose", "down", external=True)
+    session.run(*compose, "down", external=True)
     print("✅ Containers stopped (data preserved)")
 
 
@@ -388,6 +425,8 @@ def dev_clean(session):
     """
     import sys
 
+    compose = _get_compose_command()
+
     print("⚠️  WARNING: This will delete all data including database and chat history!")
     response = input("Continue? (y/N) ")
 
@@ -396,5 +435,5 @@ def dev_clean(session):
         sys.exit(0)
 
     print("\n🧹 Cleaning up containers and volumes...")
-    session.run("docker", "compose", "down", "-v", external=True)
+    session.run(*compose, "down", "-v", external=True)
     print("✅ Cleanup complete")

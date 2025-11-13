@@ -4,14 +4,33 @@ A custom LiteLLM provider that exposes [Agno](https://github.com/agno-agi/agno) 
 
 > **Note:** This project uses LiteLLM's official `CustomLLM` extension mechanism with dynamic registration via `custom_provider_map`. No forking or monkey patching required!
 
-## Overview
+## Quick Start
 
-This project implements a LiteLLM custom provider for Agno agents, allowing you to:
+Get the full stack running in under 5 minutes:
 
-- Expose Agno agents as OpenAI-compatible chat models
-- Use Agno agents with Open WebUI or any OpenAI-compatible client
-- Run agents behind a LiteLLM proxy with authentication
-- Switch between different agents using model names
+```bash
+# 1. Clone and navigate
+git clone https://github.com/durandom/agentllm
+cd agentllm
+
+# 2. Install dependencies
+uv sync
+
+# 3. Configure environment
+cp .env.example .env
+# Edit .env and add your GEMINI_API_KEY (get from https://aistudio.google.com/apikey)
+
+# 4. Start everything (containerized)
+nox -s dev-build
+```
+
+**Access Open WebUI:** <http://localhost:3000>
+
+**Available Agents:**
+- `agno/release-manager` - RHDH release management assistant
+- `agno/demo-agent` - Example agent with color tools
+
+See [docs/QUICKSTART.md](docs/QUICKSTART.md) for detailed setup instructions.
 
 ## Architecture
 
@@ -19,120 +38,13 @@ This project implements a LiteLLM custom provider for Agno agents, allowing you 
 [Client] -> [LiteLLM Proxy :8890] -> [Agno Provider] -> [Agno Agent] -> [LLM APIs]
 ```
 
-## Prerequisites
+**Components:**
+- **LiteLLM Proxy**: OpenAI-compatible API gateway with authentication
+- **Agno Provider**: Custom LiteLLM handler (`litellm.CustomLLM`) for Agno agents
+- **Agno Agents**: Intelligent agents with tools (Google Drive, Jira, etc.)
+- **Gemini API**: Underlying LLM (Google Gemini 2.5 Flash)
 
-- Python 3.11+
-- [uv](https://docs.astral.sh/uv/) package manager
-- Google Gemini API key (get from [Google AI Studio](https://aistudio.google.com/apikey))
-
-## Installation
-
-1. Clone this repository:
-
-```bash
-git clone <repo-url>
-cd agentllm
-```
-
-2. Install dependencies with uv:
-
-```bash
-uv sync
-```
-
-3. Configure environment variables:
-
-```bash
-cp .env.example .env
-# Edit .env and add your GEMINI_API_KEY
-```
-
-## Project Structure
-
-```
-agentllm/
-├── src/agentllm/
-│   ├── provider/
-│   │   └── transformation.py    # LiteLLM provider implementation
-│   ├── agents/
-│   │   └── release_manager.py   # Release manager Agno agent
-│   └── proxy_config.yaml        # LiteLLM proxy configuration
-├── tests/
-│   └── test_provider.py         # TDD unit tests
-├── noxfile.py                   # Task automation
-└── pyproject.toml               # Project configuration
-```
-
-## Usage
-
-### Running Tests
-
-```bash
-# Run unit tests
-nox -s test
-
-# Run integration tests
-nox -s integration
-
-# Run specific test
-uv run pytest tests/test_custom_handler.py::TestAgnoCustomLLM -v
-```
-
-### Starting the Proxy
-
-```bash
-# Start LiteLLM proxy with Agno provider
-nox -s proxy
-
-# Or manually:
-uv run litellm --config proxy_config.yaml --port 8890
-```
-
-### Making Requests
-
-Once the proxy is running, you can make OpenAI-compatible requests:
-
-```bash
-curl -X POST http://localhost:8890/v1/chat/completions \
-  -H "Authorization: Bearer sk-agno-test-key-12345" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "model": "agno/release-manager",
-    "messages": [
-      {"role": "user", "content": "Help me plan a release"}
-    ]
-  }'
-```
-
-### Available Models
-
-**Agno Agents** (powered by Gemini 2.5 Flash):
-
-- `agno/release-manager` - Release management assistant for software releases, changelogs, and version planning
-
-**Direct Gemini 2.5 Models:**
-
-- `gemini-2.5-pro` - Most capable model
-- `gemini-2.5-flash` - Fast and efficient (used by Agno agents)
-
-You could also use the following command, to list available models currently registered in the LiteLLM proxy:
-
-```bash
-curl -X 'GET' \
-  'http://127.0.0.1:8890/v1/models' \
-  -H "Authorization: Bearer sk-agno-test-key-12345" \
-  -H 'accept: application/json'
-```
-
-> **Note:** gemini models and agno/release-manager require a single `GEMINI_API_KEY` in your `.env` file. Get your API key from [Google AI Studio](https://aistudio.google.com/apikey).
-
-## How It Works
-
-This project uses LiteLLM's **official CustomLLM extension mechanism** - no forking or monkey patching required!
-
-### Dynamic Registration
-
-The Agno provider is registered via `custom_provider_map` in `proxy_config.yaml`:
+The provider uses LiteLLM's official `custom_provider_map` for dynamic registration:
 
 ```yaml
 litellm_settings:
@@ -141,54 +53,103 @@ litellm_settings:
       custom_handler: custom_handler.agno_handler
 ```
 
-This is the **recommended approach** from LiteLLM for adding custom providers without modifying the LiteLLM codebase.
+See [CLAUDE.md](CLAUDE.md) for detailed architecture documentation.
 
-### Implementation
+## Development
 
-The provider extends `litellm.CustomLLM` base class and implements:
+### Prerequisites
 
-- `completion()` - Synchronous completions
-- `streaming()` - Streaming responses
-- `acompletion()` - Async completions (future enhancement)
+- Python 3.11+
+- [uv](https://docs.astral.sh/uv/) package manager
+- Docker or Podman (nox auto-detects)
+- Google Gemini API key ([get here](https://aistudio.google.com/apikey))
 
-See [LiteLLM CustomLLM Docs](https://docs.litellm.ai/docs/providers/custom_llm_server) for details.
+### Development Modes
 
-## Development Workflow
+**Choose based on your workflow:**
 
-This project follows Test-Driven Development (TDD):
+| Mode | Command | Use When | Proxy | OpenWebUI |
+|------|---------|----------|-------|-----------|
+| **Full Container** | `nox -s dev-build` | Just testing agents | Container | Container |
+| **Development** | Terminal 1: `nox -s proxy`<br>Terminal 2: `nox -s dev-local-proxy` | Modifying agent code | Local (hot reload) | Container |
 
-1. Write a failing test
-2. Implement the feature
-3. Run tests: `nox -s test`
-4. Refactor if needed
+**Port reference:**
+- Open WebUI: <http://localhost:3000> (external) → container port 8080 (internal)
+- LiteLLM Proxy: <http://localhost:8890>
 
-### Adding New Agents
+See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for detailed development workflows.
 
-1. Create a new file in `src/agentllm/agents/` (e.g., `my_agent.py`):
+### Common Commands
+
+```bash
+# Testing
+nox -s test                                    # Run unit tests
+nox -s integration                             # Run integration tests (requires running proxy)
+uv run pytest tests/test_custom_handler.py -v  # Run specific test
+
+# Development
+nox -s proxy                                   # Start LiteLLM proxy locally
+nox -s dev-build                               # Start full containerized stack
+nox -s dev-logs                                # View container logs
+nox -s dev-stop                                # Stop containers (preserve data)
+nox -s dev-clean                               # Clean everything (including volumes)
+
+# Code quality
+nox -s format                                  # Format code
+make lint                                      # Run linting
+```
+
+### Testing the Proxy
+
+```bash
+# Start proxy
+nox -s proxy
+
+# Make a request
+curl -X POST http://localhost:8890/v1/chat/completions \
+  -H "Authorization: Bearer sk-agno-test-key-12345" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "agno/release-manager",
+    "messages": [{"role": "user", "content": "Help me plan a release"}]
+  }'
+```
+
+## Available Models
+
+**Agno Agents** (powered by Gemini 2.5 Flash):
+- `agno/release-manager` - RHDH release management assistant (Google Drive, Jira integration)
+- `agno/demo-agent` - Example agent with color tools (educational reference)
+
+**Direct Gemini Models:**
+- `gemini-2.5-pro` - Most capable model
+- `gemini-2.5-flash` - Fast and efficient (used by Agno agents)
+
+List models from running proxy:
+```bash
+curl -X GET http://127.0.0.1:8890/v1/models \
+  -H "Authorization: Bearer sk-agno-test-key-12345"
+```
+
+> **Note:** All models require `GEMINI_API_KEY` in your `.env` file.
+
+## Adding New Agents
+
+See [docs/agents/creating-agents.md](docs/agents/creating-agents.md) for a complete guide. Quick overview:
+
+1. **Create agent file** in `src/agentllm/agents/my_agent.py`:
 
 ```python
-from pathlib import Path
-from typing import Optional
 from agno.agent import Agent
 from agno.models.google import Gemini
-from agno.db.sqlite import SqliteDb
+from agentllm.agents.release_manager import shared_db
 
-# Use shared database
-DB_PATH = Path("tmp/agno_sessions.db")
-DB_PATH.parent.mkdir(exist_ok=True)
-shared_db = SqliteDb(db_file=str(DB_PATH))
-
-def create_my_agent(
-    temperature: Optional[float] = None,
-    max_tokens: Optional[int] = None,
-    **model_kwargs
-) -> Agent:
+def create_my_agent(temperature=None, max_tokens=None, **kwargs):
     model_params = {"id": "gemini-2.5-flash"}
     if temperature is not None:
         model_params["temperature"] = temperature
     if max_tokens is not None:
         model_params["max_tokens"] = max_tokens
-    model_params.update(model_kwargs)
 
     return Agent(
         name="my-agent",
@@ -196,218 +157,140 @@ def create_my_agent(
         description="My custom agent",
         instructions=["Your instructions here"],
         markdown=True,
-        db=shared_db,
-        add_history_to_context=True,
+        db=shared_db,                    # Shared session database
+        add_history_to_context=True,     # Enable conversation memory
         num_history_runs=10,
         read_chat_history=True,
     )
 
-def get_agent(
-    agent_name: str = "my-agent",
-    temperature: Optional[float] = None,
-    max_tokens: Optional[int] = None,
-    **model_kwargs
-) -> Agent:
+def get_agent(agent_name="my-agent", temperature=None, max_tokens=None, **kwargs):
     if agent_name != "my-agent":
         raise KeyError(f"Agent '{agent_name}' not found.")
-    return create_my_agent(temperature, max_tokens, **model_kwargs)
+    return create_my_agent(temperature, max_tokens, **kwargs)
 ```
 
-2. Update imports in `src/agentllm/custom_handler.py` to use your new agent module
+2. **Register agent** in `src/agentllm/custom_handler.py` (import your module)
 
-3. Add to `proxy_config.yaml`:
+3. **Add to proxy config** in `proxy_config.yaml`:
 
 ```yaml
-  - model_name: agno/my-agent
-    litellm_params:
-      model: agno/my-agent
-      api_base: http://localhost/agno
-      custom_llm_provider: agno
+- model_name: agno/my-agent
+  litellm_params:
+    model: agno/my-agent
+    custom_llm_provider: agno
 ```
 
-4. Restart the proxy
-
-## Running with Open WebUI
-
-The project supports two development modes to accommodate different workflows.
-
-### Development Mode (Recommended)
-
-**Use case:** Fast iteration on proxy/agent code with live debugging
-
-Run the LiteLLM proxy locally and Open WebUI in a container:
-
-```bash
-# Terminal 1: Start local proxy with hot reload
-nox -s proxy
-
-# Terminal 2: Start Open WebUI (connects to local proxy)
-nox -s dev_local_proxy
-```
-
-**How it works:**
-
-- Proxy runs locally with instant code reloading
-- Open WebUI runs in Docker and connects to proxy via `http://host.docker.internal:8890/v1`
-- Works on all platforms (Mac, Linux, Windows)
-- Configuration in `.env`: `LITELLM_PROXY_URL=http://host.docker.internal:8890/v1`
-
-**Advantages:**
-
-- ✨ Instant code reloading for proxy changes
-- 🐛 Easy debugging with local debuggers
-- 📊 Direct log access in terminal
-- 💨 Lower resource usage
-
-### Production Mode (Full Container Stack)
-
-**Use case:** Testing the complete containerized setup
-
-Run both services in containers:
-
-```bash
-# Start both services (foreground)
-nox -s dev_full
-
-# Or in background
-nox -s dev_full -- -d
-```
-
-**How it works:**
-
-- Both LiteLLM proxy and Open WebUI run in Docker
-- Services communicate via internal Docker network
-- Matches production deployment architecture
-
-**Advantages:**
-
-- 🏭 Production-like environment
-- 🐳 Tests full Docker setup
-- 👥 Easier for non-Python developers
-
-### Quick Start
-
-1. **Configure environment**:
-
-   ```bash
-   cp .env.example .env
-   # Edit .env and add your GEMINI_API_KEY
-   ```
-
-2. **Choose your mode and start**:
-
-   For development mode:
-
-   ```bash
-   # Terminal 1
-   nox -s proxy
-   # Terminal 2
-   nox -s dev_local_proxy
-   ```
-
-   For production mode:
-
-   ```bash
-   nox -s dev_full
-   ```
-
-3. **Access Open WebUI**:
-   - Open your browser to <http://localhost:3000>
-   - Create an account (first user becomes admin)
-   - The Agno models will be automatically available!
-
-4. **Select an Agno agent**:
-   - Click on the model selector
-   - Choose `agno/release-manager`
-   - Start chatting with your Agno agent!
-
-### Useful Commands
-
-```bash
-# View logs from containers
-nox -s dev_logs                    # All services
-nox -s dev_logs -- litellm-proxy   # Specific service
-
-# Stop containers (preserves data)
-nox -s dev_stop
-
-# Clean everything (including volumes)
-nox -s dev_clean
-```
-
-### Configuration Details
-
-The connection between Open WebUI and LiteLLM proxy is controlled by `LITELLM_PROXY_URL` in `.env`:
-
-```bash
-# Development mode (default)
-LITELLM_PROXY_URL=http://host.docker.internal:8890/v1
-
-# Production mode (set automatically by nox -s dev_full)
-LITELLM_PROXY_URL=http://litellm-proxy:8890/v1
-```
-
-**No manual .env editing needed** - just use the appropriate `nox` command!
+4. **Restart proxy**: `nox -s proxy`
 
 ## Configuration
 
 ### Environment Variables
 
-See `.env.example` for all configuration options. Key variables include:
+Required:
+- `GEMINI_API_KEY` - Google Gemini API key ([get here](https://aistudio.google.com/apikey))
+- `LITELLM_MASTER_KEY` - Proxy API key (default: `sk-agno-test-key-12345`)
 
-- **GEMINI_API_KEY** - Required for all models (Agno agents and direct Gemini models). Get from [Google AI Studio](https://aistudio.google.com/apikey)
-- **LITELLM_MASTER_KEY** - API key for accessing the LiteLLM proxy (default: `sk-agno-test-key-12345`)
+Optional:
+- `OPENAI_API_BASE_URL` - LiteLLM proxy URL for Open WebUI
+  - Development: `http://host.docker.internal:8890/v1` (default)
+  - Production: `http://litellm-proxy:8890/v1`
+- `GDRIVE_CLIENT_ID`, `GDRIVE_CLIENT_SECRET` - For Google Drive integration
+- `RELEASE_MANAGER_SYSTEM_PROMPT_GDRIVE_URL` - Extended system prompt URL
+
+See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for complete reference.
 
 ### Proxy Configuration
 
-Edit `src/agentllm/proxy_config.yaml` to:
+Edit `proxy_config.yaml` to:
+- Add/remove models (Agno agents, Gemini, or other LLM providers)
+- Configure authentication
+- Adjust logging and server settings
 
-- Add/remove agent models (Agno agents, Gemini, or other LLM providers)
-- Change authentication settings
-- Configure logging
-- Adjust server settings
+## Key Features
 
-The proxy already includes configurations for:
-
-- **Agno agents** (custom agents with specialized behaviors)
-- **Google Gemini 2.5 models** (gemini-2.5-pro, gemini-2.5-flash)
-
-## Provider Implementation
+### LiteLLM Custom Provider
 
 The Agno provider extends `litellm.CustomLLM` and implements:
 
 - `completion()` - Synchronous completions with full agent execution
-- `streaming()` - Synchronous streaming returning GenericStreamingChunk format
+- `streaming()` - Synchronous streaming (GenericStreamingChunk format)
 - `acompletion()` - Async completions using `agent.arun()`
-- `astreaming()` - **True real-time streaming** using `agent.arun(stream=True)` ⚡
-- Dynamic registration via `custom_provider_map` in config
-- Parameter pass-through - `temperature` and `max_tokens` are passed to agent's model
-- Conversation context - Previous messages are preserved in agent's session
+- `astreaming()` - True real-time streaming with `agent.arun(stream=True)` ⚡
+
+**Key Benefits:**
+- No LiteLLM modifications required
+- Parameter pass-through (`temperature`, `max_tokens` → agent model)
+- Conversation context preserved in agent sessions
+- Per-user agent isolation
+
+### Agent Wrapper Pattern
+
+Agents use a wrapper pattern (see `ReleaseManager` in `src/agentllm/agents/release_manager.py`):
+
+- **Toolkit Configuration**: OAuth flows for Google Drive, API tokens for Jira
+- **Per-user Isolation**: Separate agents and credentials per user
+- **Configuration Management**: Extract credentials from messages, prompt when missing
+- **Session Memory**: SQLite-backed conversation history
 
 ### Streaming Support
 
-LiteLLM's `CustomLLM` requires streaming methods to return `GenericStreamingChunk` dictionaries, **not** `ModelResponse` objects. The key format requirements:
-
-**GenericStreamingChunk Format:**
+LiteLLM's `CustomLLM` requires **GenericStreamingChunk format**:
 
 ```python
 {
-    "text": "content here",           # Use "text", not "content" or "delta"
+    "text": "content here",           # Use "text", not "content"
     "finish_reason": "stop" or None,
     "index": 0,
     "is_finished": True or False,
     "tool_use": None,
-    "usage": {"completion_tokens": 0, "prompt_tokens": 0, "total_tokens": 0}
+    "usage": {...}
 }
 ```
 
-**Sync streaming** (`streaming()`): Gets the complete response from `completion()` and returns it as a single GenericStreamingChunk.
+**Async streaming** provides true real-time token-by-token streaming using Agno's native `async for` with `agent.arun(stream=True)`.
 
-**Async streaming** (`astreaming()`): Uses Agno's native `async for` streaming with `agent.arun(stream=True)` for true real-time token-by-token streaming, yielding each chunk in GenericStreamingChunk format.
+## Project Structure
 
-**Common Pitfall:** Do NOT return `ModelResponse` objects from streaming methods - LiteLLM's streaming handler expects the `GenericStreamingChunk` dictionary format with a `text` field. Returning `ModelResponse` will cause `AttributeError: 'ModelResponse' object has no attribute 'text'`.
+```
+agentllm/
+├── src/agentllm/
+│   ├── custom_handler.py              # LiteLLM CustomLLM implementation
+│   ├── proxy_config.yaml              # LiteLLM proxy configuration
+│   ├── agents/
+│   │   ├── release_manager.py         # ReleaseManager wrapper class
+│   │   ├── demo_agent.py              # Demo agent (example)
+│   │   └── toolkit_configs/
+│   │       ├── base.py                # Abstract toolkit config base
+│   │       ├── gdrive_config.py       # Google Drive OAuth
+│   │       └── jira_config.py         # Jira API token
+│   ├── tools/
+│   │   ├── gdrive_toolkit.py          # Google Drive tools
+│   │   ├── jira_toolkit.py            # Jira tools
+│   │   └── color_toolkit.py           # Demo color tools
+│   └── db/
+│       └── token_storage.py           # SQLite credential storage
+├── tests/
+│   ├── test_custom_handler.py         # Provider tests
+│   ├── test_release_manager.py        # ReleaseManager tests
+│   └── test_demo_agent.py             # Demo agent tests
+├── docs/
+│   ├── QUICKSTART.md                  # Getting started guide
+│   ├── DEVELOPMENT.md                 # Development workflows
+│   ├── CONFIGURATION.md               # Configuration reference
+│   └── agents/
+│       └── creating-agents.md         # Agent creation guide
+├── noxfile.py                         # Task automation
+├── proxy_config.yaml                  # Proxy config (symlink to src/)
+└── CLAUDE.md                          # Architecture & developer guide
+```
 
-This approach requires **no modifications to LiteLLM** - it's a pure plugin using official extension APIs.
+## Documentation
+
+- **[Quick Start](docs/QUICKSTART.md)** - Detailed getting started guide
+- **[Development](docs/DEVELOPMENT.md)** - Development workflows and troubleshooting
+- **[Configuration](docs/CONFIGURATION.md)** - Environment variables and OAuth setup
+- **[Creating Agents](docs/agents/creating-agents.md)** - Guide to adding new agents
+- **[CLAUDE.md](CLAUDE.md)** - Complete architecture and development reference
 
 ## Troubleshooting
 
@@ -419,7 +302,7 @@ uv pip install -e .
 
 ### Agent Fails to Initialize
 
-Ensure you have set `GEMINI_API_KEY` in your `.env` file. Get your key from [Google AI Studio](https://aistudio.google.com/apikey).
+Ensure `GEMINI_API_KEY` is set in `.env`. Get your key from [Google AI Studio](https://aistudio.google.com/apikey).
 
 ### Proxy Won't Start
 
@@ -429,12 +312,21 @@ Check that port 8890 is available:
 lsof -i :8890
 ```
 
+### Can't Access Open WebUI
+
+- Verify container is running: `docker ps` or `podman ps`
+- Check port mapping: Should see `0.0.0.0:3000->8080/tcp`
+- Try http://localhost:3000 (external port, not 8080)
+
+See [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md) for more troubleshooting tips.
+
 ## Contributing
 
-1. Write tests for new features
-2. Follow TDD workflow
-3. Run `make lint` and `make format`
-4. Update documentation
+1. Write tests for new features (TDD workflow)
+2. Run tests: `nox -s test`
+3. Format code: `nox -s format`
+4. Run linting: `make lint`
+5. Update documentation
 
 ## License
 
@@ -444,5 +336,5 @@ GPL-3.0-only
 
 - [Agno Framework](https://github.com/agno-agi/agno)
 - [LiteLLM](https://github.com/BerriAI/litellm)
-- [LiteLLM Provider Registration](https://docs.litellm.ai/docs/provider_registration/)
+- [LiteLLM CustomLLM Docs](https://docs.litellm.ai/docs/providers/custom_llm_server)
 - [Open WebUI](https://github.com/open-webui/open-webui)

@@ -283,8 +283,8 @@ The Release Manager uses a **dual-prompt architecture** that separates stable ag
 - Agent is self-aware: knows about the dual-prompt system and can suggest updates to users
 
 **Documentation:**
-- `docs/release_manager_system_prompt.md` - Pure agent instruction template (what to copy to Google Doc)
-- `docs/release_manager_prompt_guide.md` - User guide for setup and maintenance
+- `docs/templates/release_manager_system_prompt.md` - Pure agent instruction template (what to copy to Google Doc)
+- `docs/templates/release_manager_prompt_guide.md` - User guide for setup and maintenance
 - Setup: Copy the template to a Google Doc and configure via `RELEASE_MANAGER_SYSTEM_PROMPT_GDRIVE_URL`
 
 **Design Benefits:**
@@ -299,10 +299,10 @@ The Release Manager uses a **dual-prompt architecture** that separates stable ag
 **Initial Setup:**
 
 1. **Create Google Drive Document**:
-   - Copy content from `docs/release_manager_system_prompt.md`
+   - Copy content from `docs/templates/release_manager_system_prompt.md`
    - Create a new Google Drive document with this content
    - Share with read access for all Release Manager users
-   - (Optional) Also copy `docs/release_manager_prompt_guide.md` for content maintainers
+   - (Optional) Also copy `docs/templates/release_manager_prompt_guide.md` for content maintainers
 
 2. **Configure Environment Variable**:
    ```bash

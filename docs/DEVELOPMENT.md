@@ -1,6 +1,40 @@
 # Local Development Guide
 
-This guide explains how to run the Sidekick Agent application locally using Docker containers.
+This guide explains how to run the Sidekick Agent application locally for development and testing.
+
+## Overview
+
+AgentLLM supports two development modes optimized for different workflows. Choose the mode that fits your needs.
+
+## Choosing a Development Mode
+
+```
+┌─ Are you modifying proxy or agent code?
+│
+├─ YES → Development Mode (Local Proxy + Containerized UI)
+│         ✓ Instant code reloading
+│         ✓ Easy debugging with local tools
+│         ✓ Direct log access
+│         Command: nox -s proxy (terminal 1)
+│                  nox -s dev-local-proxy (terminal 2)
+│
+└─ NO  → Full Container Mode (Recommended for First-Time Setup)
+          ✓ Simplest to start - one command
+          ✓ Production-like environment
+          ✓ No Python environment needed
+          Command: nox -s dev-build
+```
+
+### Quick Decision Guide
+
+| Scenario | Recommended Mode |
+|----------|------------------|
+| First time trying AgentLLM | Full Container |
+| Testing existing agents | Full Container |
+| Adding/modifying agents | Development Mode |
+| Debugging agent behavior | Development Mode |
+| Working on toolkit code | Development Mode |
+| Creating documentation | Full Container |
 
 ## Architecture
 
@@ -79,7 +113,28 @@ nox -s dev-build
 
 That's it! 🎉
 
+## Port Reference
+
+Understanding ports is important for accessing services and configuring connections:
+
+| Service | Internal Port | External Port | Access URL | Notes |
+|---------|---------------|---------------|------------|-------|
+| **Open WebUI** | 8080 | 3000 | http://localhost:3000 | User interface |
+| **LiteLLM Proxy** | 8890 | 8890 | http://localhost:8890 | API endpoint |
+
+**Port Mapping Explanation:**
+- **Internal Port**: Port inside the container (used in container-to-container communication)
+- **External Port**: Port on your host machine (what you use in browser/curl)
+- Mapping notation: `external:internal` (e.g., `3000:8080`)
+
+**Connection URLs:**
+- From browser: Use external port (http://localhost:3000)
+- From container: Use internal port and service name (http://open-webui:8080)
+- From host machine: Use external port (http://localhost:8890)
+
 ## Development Commands (via Nox)
+
+**Note:** Nox automatically detects whether to use Docker or Podman - no configuration needed!
 
 The project uses [Nox](https://nox.thea.codes/) for managing development tasks. All Docker Compose operations are available as nox sessions.
 
@@ -215,66 +270,37 @@ docker compose exec open-webui bash
 
 ### Environment Variables
 
-All configuration is in `.env`:
+All configuration is in `.env`. See [CONFIGURATION.md](CONFIGURATION.md) for detailed setup instructions.
 
+**Required variables:**
 ```bash
-# Required
-GEMINI_API_KEY=AIzaSy...
+GEMINI_API_KEY=AIzaSy...  # Get from https://aistudio.google.com/apikey
+```
 
-# Optional: LiteLLM configuration
-LITELLM_MASTER_KEY=sk-agno-test-key-12345
-LITELLM_PORT=8890
-
-# Optional: OAuth
+**Optional OAuth and integrations:**
+```bash
+# Open WebUI OAuth (Google sign-in)
 ENABLE_OAUTH_SIGNUP=false
 OAUTH_CLIENT_ID=xxx.apps.googleusercontent.com
 OAUTH_CLIENT_SECRET=xxx
 
-# Optional: Google Drive
+# Google Drive (for Release Manager agent)
 GDRIVE_CLIENT_ID=xxx.apps.googleusercontent.com
 GDRIVE_CLIENT_SECRET=xxx
+
+# Jira (for Release Manager agent)
+JIRA_URL=https://your-domain.atlassian.net
+JIRA_USERNAME=your.email@example.com
+JIRA_API_TOKEN=xxx
 ```
 
-### Enabling Google OAuth (Optional)
+**Setup guides:**
+- **Open WebUI OAuth**: See [CONFIGURATION.md#open-webui-oauth-setup](CONFIGURATION.md#open-webui-oauth-setup)
+- **Google Drive**: See [CONFIGURATION.md#google-drive-oauth](CONFIGURATION.md#google-drive-oauth)
+- **Jira**: See [CONFIGURATION.md#jira-configuration](CONFIGURATION.md#jira-configuration)
+- **Extended System Prompts**: See [CONFIGURATION.md#extended-system-prompts](CONFIGURATION.md#extended-system-prompts)
 
-To enable Google sign-in for Open WebUI:
-
-1. **Create OAuth credentials** in [Google Cloud Console](https://console.cloud.google.com/apis/credentials)
-   - Application type: **Web application**
-   - Authorized redirect URI: `http://localhost:3000/oauth/google/callback`
-
-2. **Update `.env`**:
-   ```bash
-   ENABLE_OAUTH_SIGNUP=true
-   OAUTH_CLIENT_ID=your_client_id.apps.googleusercontent.com
-   OAUTH_CLIENT_SECRET=your_client_secret
-   ```
-
-3. **Restart services**:
-   ```bash
-   docker compose restart
-   ```
-
-### Enabling Google Drive Integration (Optional)
-
-To enable Google Drive features in the Release Manager agent:
-
-1. **Enable Google Drive API** in [Google Cloud Console](https://console.cloud.google.com)
-
-2. **Create OAuth credentials**:
-   - Application type: **Web application**
-   - Authorized redirect URI: `http://localhost`
-
-3. **Update `.env`**:
-   ```bash
-   GDRIVE_CLIENT_ID=your_client_id.apps.googleusercontent.com
-   GDRIVE_CLIENT_SECRET=your_client_secret
-   ```
-
-4. **Restart services**:
-   ```bash
-   docker compose restart litellm-proxy
-   ```
+All configuration details, OAuth setup instructions, and troubleshooting are documented in [CONFIGURATION.md](CONFIGURATION.md).
 
 ## Data Persistence
 
