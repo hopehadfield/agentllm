@@ -80,7 +80,7 @@ class ProxyManager:
 @pytest.fixture(scope="module")
 def proxy():
     """Fixture that provides a running proxy server."""
-    config_path = Path("src/agentllm/proxy_config.yaml")
+    config_path = Path("proxy_config.yaml")
     if not config_path.exists():
         pytest.skip("Proxy config file not found")
 

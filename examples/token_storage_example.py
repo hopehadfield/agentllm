@@ -1,11 +1,35 @@
-"""
-Example usage of TokenStorage for managing Jira and Google Drive credentials.
+#!/usr/bin/env -S uv run
+# /// script
+# requires-python = ">=3.11"
+# dependencies = [
+#     "agno>=2.2.10",
+#     "jira>=3.0.0",
+#     "loguru>=0.7.0",
+#     "sqlalchemy>=2.0.0",
+#     "google-auth-oauthlib>=1.0.0",
+#     "google-api-python-client>=2.0.0",
+#     "html-to-markdown>=1.0.0",
+# ]
+# ///
+"""Example usage of TokenStorage for managing Jira and Google Drive credentials.
 
 This demonstrates how to:
 1. Store tokens in the database
 2. Retrieve tokens from the database
 3. Initialize toolkits with database-backed authentication
+
+Usage:
+    uv run examples/token_storage_example.py
+    # OR
+    python examples/token_storage_example.py
 """
+
+import sys
+from pathlib import Path
+
+# Add src directory to path to allow imports
+src_path = Path(__file__).parent.parent / "src"
+sys.path.insert(0, str(src_path))
 
 from google.oauth2.credentials import Credentials
 

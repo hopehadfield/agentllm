@@ -14,6 +14,7 @@ from agno.agent import (
     ToolCallStartedEvent,
 )
 from agno.db.sqlite import SqliteDb
+from agno.models.anthropic import Claude
 from agno.models.google import Gemini
 from loguru import logger
 
@@ -105,7 +106,6 @@ class BaseAgentWrapper(ABC):
         Returns:
             List of toolkit configuration instances
         """
-        pass
 
     @abstractmethod
     def _build_agent_instructions(self, user_id: str) -> list[str]:
@@ -118,7 +118,6 @@ class BaseAgentWrapper(ABC):
         Returns:
             List of instruction strings
         """
-        pass
 
     @abstractmethod
     def _get_agent_name(self) -> str:
@@ -128,7 +127,6 @@ class BaseAgentWrapper(ABC):
         Returns:
             Agent name string
         """
-        pass
 
     @abstractmethod
     def _get_agent_description(self) -> str:
@@ -138,7 +136,6 @@ class BaseAgentWrapper(ABC):
         Returns:
             Agent description string
         """
-        pass
 
     # ========== HOOK METHODS (SUBCLASS OPTIONAL) ==========
 
@@ -193,12 +190,14 @@ class BaseAgentWrapper(ABC):
         return {
             "db": self._shared_db,
             "add_history_to_context": True,
+            "add_datetime_to_context": True,
             "num_history_runs": 10,  # Include last 10 messages
             "read_chat_history": True,  # Allow agent to read full history
             "markdown": True,
         }
 
-    def _on_config_stored(self, config: BaseToolkitConfig, user_id: str) -> None:  # noqa: B027
+    @abstractmethod
+    def _on_config_stored(self, config: BaseToolkitConfig, user_id: str) -> None:
         """
         Override for cross-config dependencies (e.g., SystemPromptExtension).
 
@@ -208,8 +207,6 @@ class BaseAgentWrapper(ABC):
             config: The toolkit config that was stored
             user_id: User identifier
         """
-        # Hook method - subclasses can override to handle config dependencies
-        pass
 
     # ========== CONCRETE METHODS (SHARED IMPLEMENTATION) ==========
 
@@ -508,9 +505,22 @@ class BaseAgentWrapper(ABC):
         """
         logger.debug("Creating Agno Agent instance...")
 
+        _model: Gemini | Claude | None = None
+        if self._get_model_id() == "gemini-2.5-flash":
+            logger.debug("Using Gemini model for Agent")
+            _model = Gemini(**model_params)
+        elif self._get_model_id().startswith("claude-"):
+            logger.debug("Using Claude model for Agent")
+            _model = Claude(**model_params)
+
+        if _model is None:
+            error_msg = f"❌ Unsupported model ID: {self._get_model_id()}"
+            logger.error(error_msg)
+            raise ValueError(error_msg)
+
         agent = Agent(
             name=self._get_agent_name(),
-            model=Gemini(**model_params),
+            model=_model,
             description=self._get_agent_description(),
             instructions=instructions,
             tools=tools if tools else None,
@@ -565,7 +575,13 @@ class BaseAgentWrapper(ABC):
 
         return agent
 
-    def run(self, message: str, user_id: str | None = None, session_id: str | None = None, **kwargs) -> Any:
+    def run(
+        self,
+        message: str,
+        user_id: str | None = None,
+        session_id: str | None = None,
+        **kwargs,
+    ) -> Any:
         """
         Run the agent with configuration management (synchronous).
 
@@ -627,7 +643,13 @@ class BaseAgentWrapper(ABC):
             logger.info("=" * 80)
             return self._create_simple_response(error_msg)
 
-    async def _arun_non_streaming(self, message: str, user_id: str | None = None, session_id: str | None = None, **kwargs):
+    async def _arun_non_streaming(
+        self,
+        message: str,
+        user_id: str | None = None,
+        session_id: str | None = None,
+        **kwargs,
+    ):
         """Internal async method for non-streaming mode."""
         logger.info("=" * 80)
         logger.info(f">>> {self.__class__.__name__}._arun_non_streaming() STARTED - user_id={user_id}, session_id={session_id}")
@@ -658,7 +680,13 @@ class BaseAgentWrapper(ABC):
             effective_session_id = session_id if session_id is not None else self._session_id
 
             logger.info(f"Running agent.arun() for user {user_id}, session {effective_session_id} (non-streaming)...")
-            result = await agent.arun(message, user_id=user_id, session_id=effective_session_id, stream=False, **kwargs)
+            result = await agent.arun(
+                message,
+                user_id=user_id,
+                session_id=effective_session_id,
+                stream=False,
+                **kwargs,
+            )
             logger.info(f"✅ Agent.arun() completed, result type: {type(result)}")
             logger.info(f"<<< {self.__class__.__name__}._arun_non_streaming() FINISHED (success)")
             logger.info("=" * 80)
@@ -672,7 +700,11 @@ class BaseAgentWrapper(ABC):
             return self._create_simple_response(error_msg)
 
     async def _arun_streaming(
-        self, message: str, user_id: str | None = None, session_id: str | None = None, **kwargs
+        self,
+        message: str,
+        user_id: str | None = None,
+        session_id: str | None = None,
+        **kwargs,
     ) -> AsyncIterator[dict[str, Any]]:
         """
         Internal async generator for streaming mode.
@@ -1028,7 +1060,14 @@ class BaseAgentWrapper(ABC):
             logger.info(f"<<< {self.__class__.__name__}._arun_streaming() FINISHED (exception)")
             logger.info("=" * 80)
 
-    def arun(self, message: str, user_id: str | None = None, session_id: str | None = None, stream: bool = False, **kwargs):
+    def arun(
+        self,
+        message: str,
+        user_id: str | None = None,
+        session_id: str | None = None,
+        stream: bool = False,
+        **kwargs,
+    ):
         """
         Run the agent asynchronously with configuration management.
 

@@ -23,9 +23,7 @@ class JiraCommentData(BaseModel):
     author: str = Field(..., description="Comment author display name")
     created: str = Field(..., description="Comment creation timestamp")
     body: str = Field(..., description="Comment body text")
-    pr_urls_found: list[str] = Field(
-        default_factory=list, description="GitHub PR URLs found in comment"
-    )
+    pr_urls_found: list[str] = Field(default_factory=list, description="GitHub PR URLs found in comment")
 
 
 class JiraIssueData(BaseModel):
@@ -42,15 +40,11 @@ class JiraIssueData(BaseModel):
     updated_date: str | None = Field(None, description="Last update timestamp")
     components: list[str] = Field(default_factory=list, description="Affected components")
     labels: list[str] = Field(default_factory=list, description="Ticket labels")
-    pull_requests: list[str] = Field(
-        default_factory=list, description="GitHub PR URLs found in ticket"
-    )
-    comments: list[JiraCommentData] | None = Field(
-        None, description="All ticket comments with PR URLs extracted"
-    )
-    custom_fields: dict[str, Any] | None = Field(
-        None, description="Custom Jira fields like release notes"
-    )
+    target_version: list[str] | None = Field(None, description="Target version(s) for the issue")
+    product_manager: str | None = Field(None, description="Product manager display name")
+    pull_requests: list[str] = Field(default_factory=list, description="GitHub PR URLs found in ticket")
+    comments: list[JiraCommentData] | None = Field(None, description="All ticket comments with PR URLs extracted")
+    custom_fields: dict[str, Any] | None = Field(None, description="Custom Jira fields like release notes")
 
 
 def parse_json_to_jira_issue(json_content: str) -> JiraIssueData | None:
@@ -65,6 +59,7 @@ def parse_json_to_jira_issue(json_content: str) -> JiraIssueData | None:
     """
     try:
         data = json.loads(json_content)
+        logger.debug("Parsing JSON content to JiraIssueData", data=data)
 
         # Handle different possible JSON structures
         if isinstance(data, dict):
@@ -179,7 +174,8 @@ class JiraTools(Toolkit):
                 if self._username and self._token:
                     logger.debug("Using basic auth (username + token)")
                     self._jira_client = JIRA(
-                        server=self._server_url, basic_auth=(self._username, self._token)
+                        server=self._server_url,
+                        basic_auth=(self._username, self._token),
                     )
                 else:
                     logger.debug("Using token auth")
@@ -228,14 +224,12 @@ class JiraTools(Toolkit):
             "summary": issue.fields.summary,
             "description": issue.fields.description or "",
             "status": issue.fields.status.name,
-            "priority": issue.fields.priority.name if issue.fields.priority else "Unknown",
-            "assignee": issue.fields.assignee.displayName if issue.fields.assignee else None,
-            "reporter": issue.fields.reporter.displayName if issue.fields.reporter else None,
+            "priority": (issue.fields.priority.name if issue.fields.priority else "Unknown"),
+            "assignee": (issue.fields.assignee.displayName if issue.fields.assignee else None),
+            "reporter": (issue.fields.reporter.displayName if issue.fields.reporter else None),
             "created_date": str(issue.fields.created) if issue.fields.created else None,
             "updated_date": str(issue.fields.updated) if issue.fields.updated else None,
-            "components": [comp.name for comp in issue.fields.components]
-            if issue.fields.components
-            else [],
+            "components": ([comp.name for comp in issue.fields.components] if issue.fields.components else []),
             "labels": list(issue.fields.labels) if issue.fields.labels else [],
         }
 
@@ -260,9 +254,7 @@ class JiraTools(Toolkit):
                         # Store comment data using Pydantic model
                         comment_data = JiraCommentData(
                             id=getattr(comment, "id", None),
-                            author=getattr(
-                                getattr(comment, "author", {}), "displayName", "Unknown"
-                            ),
+                            author=getattr(getattr(comment, "author", {}), "displayName", "Unknown"),
                             created=str(getattr(comment, "created", "")),
                             body=comment.body,
                             pr_urls_found=comment_pr_urls,
@@ -270,9 +262,7 @@ class JiraTools(Toolkit):
                         comments_data.append(comment_data)
 
                         if comment_pr_urls:
-                            logger.debug(
-                                f"Found {len(comment_pr_urls)} PR URLs in comment {comment.id}"
-                            )
+                            logger.debug(f"Found {len(comment_pr_urls)} PR URLs in comment {comment.id}")
             else:
                 logger.debug(f"No comments found for {issue.key}")
         except (AttributeError, Exception) as e:
@@ -296,6 +286,36 @@ class JiraTools(Toolkit):
                     logger.debug(f"Found PR URL in custom field: {pr_data}")
         except (AttributeError, Exception) as e:
             logger.debug(f"Could not extract custom PR field from issue {issue.key}: {e}")
+
+        # Extract target version (customfield_12319940)
+        target_version = None
+        try:
+            target_version_data = getattr(issue.fields, "customfield_12319940", None)
+            if target_version_data:
+                if isinstance(target_version_data, list):
+                    # Extract version names from version objects
+                    target_version = [v.name if hasattr(v, "name") else str(v) for v in target_version_data]
+                    logger.debug(f"Found target version(s) for {issue.key}: {target_version}")
+                else:
+                    # Single version object
+                    target_version = [target_version_data.name if hasattr(target_version_data, "name") else str(target_version_data)]
+                    logger.debug(f"Found single target version for {issue.key}: {target_version}")
+        except (AttributeError, Exception) as e:
+            logger.debug(f"Could not extract target version from issue {issue.key}: {e}")
+
+        # Extract product manager (customfield_12316752)
+        product_manager = None
+        try:
+            product_manager_data = getattr(issue.fields, "customfield_12316752", None)
+            if product_manager_data:
+                if hasattr(product_manager_data, "displayName"):
+                    product_manager = product_manager_data.displayName
+                    logger.debug(f"Found product manager for {issue.key}: {product_manager}")
+                elif isinstance(product_manager_data, str):
+                    product_manager = product_manager_data
+                    logger.debug(f"Found product manager (string) for {issue.key}: {product_manager}")
+        except (AttributeError, Exception) as e:
+            logger.debug(f"Could not extract product manager from issue {issue.key}: {e}")
 
         # Add custom fields section for additional metadata
         custom_fields = {}
@@ -348,6 +368,8 @@ class JiraTools(Toolkit):
             updated_date=details["updated_date"],
             components=details["components"],
             labels=details["labels"],
+            target_version=target_version,
+            product_manager=product_manager,
             pull_requests=list(set(pr_urls)),  # Remove duplicates
             comments=comments_data if comments_data else None,
             custom_fields=custom_fields if custom_fields else None,
@@ -425,9 +447,7 @@ class JiraTools(Toolkit):
 
             # Search with expanded fields for better data
             logger.debug("Executing JQL search with expanded fields")
-            issues = jira.search_issues(
-                jql_query, maxResults=max_results, expand="renderedFields,changelog"
-            )
+            issues = jira.search_issues(jql_query, maxResults=max_results, expand="renderedFields,changelog")
 
             logger.debug(f"Found {len(issues)} issues matching the query")
 
@@ -443,17 +463,41 @@ class JiraTools(Toolkit):
                     "key": issue.key,
                     "summary": issue.fields.summary,
                     "status": issue.fields.status.name,
-                    "assignee": issue.fields.assignee.displayName
-                    if issue.fields.assignee
-                    else "Unassigned",
-                    "priority": issue.fields.priority.name if issue.fields.priority else "Unknown",
-                    "created_date": str(issue.fields.created) if issue.fields.created else None,
-                    "updated_date": str(issue.fields.updated) if issue.fields.updated else None,
-                    "components": [comp.name for comp in issue.fields.components]
-                    if issue.fields.components
-                    else [],
+                    "assignee": (issue.fields.assignee.displayName if issue.fields.assignee else "Unassigned"),
+                    "priority": (issue.fields.priority.name if issue.fields.priority else "Unknown"),
+                    "created_date": (str(issue.fields.created) if issue.fields.created else None),
+                    "updated_date": (str(issue.fields.updated) if issue.fields.updated else None),
+                    "components": ([comp.name for comp in issue.fields.components] if issue.fields.components else []),
                     "labels": list(issue.fields.labels) if issue.fields.labels else [],
                 }
+
+                # Extract target version (customfield_12319940)
+                try:
+                    target_version_data = getattr(issue.fields, "customfield_12319940", None)
+                    if target_version_data:
+                        if isinstance(target_version_data, list):
+                            issue_details["target_version"] = [v.name if hasattr(v, "name") else str(v) for v in target_version_data]
+                            logger.debug(f"Found target version(s) in {issue.key}: {issue_details['target_version']}")
+                        else:
+                            issue_details["target_version"] = [
+                                target_version_data.name if hasattr(target_version_data, "name") else str(target_version_data)
+                            ]
+                            logger.debug(f"Found single target version in {issue.key}: {issue_details['target_version']}")
+                except (AttributeError, Exception) as e:
+                    logger.debug(f"Could not extract target version from {issue.key}: {e}")
+
+                # Extract product manager (customfield_12316752)
+                try:
+                    product_manager_data = getattr(issue.fields, "customfield_12316752", None)
+                    if product_manager_data:
+                        if hasattr(product_manager_data, "displayName"):
+                            issue_details["product_manager"] = product_manager_data.displayName
+                            logger.debug(f"Found product manager in {issue.key}: {issue_details['product_manager']}")
+                        elif isinstance(product_manager_data, str):
+                            issue_details["product_manager"] = product_manager_data
+                            logger.debug(f"Found product manager (string) in {issue.key}: {issue_details['product_manager']}")
+                except (AttributeError, Exception) as e:
+                    logger.debug(f"Could not extract product manager from {issue.key}: {e}")
 
                 # Add custom fields if they exist
                 try:
