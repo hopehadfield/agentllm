@@ -8,27 +8,19 @@ A custom LiteLLM provider that exposes [Agno](https://github.com/agno-agi/agno) 
 
 Get the full stack running in under 5 minutes:
 
-**Prerequisites:** Python 3.11+, [uv](https://docs.astral.sh/uv/getting-started/installation/), [nox](https://nox.thea.codes/), [Podman](https://podman.io/), and a [Gemini API key](https://aistudio.google.com/apikey)
+**Prerequisites:** [Podman](https://podman.io/) and a [Gemini API key](https://aistudio.google.com/apikey)
 
 ```bash
-# 0. Install uv and nox (if not already installed)
-curl -LsSf https://astral.sh/uv/install.sh | sh  # Install uv
-uv tool install nox                               # Install nox
-
 # 1. Clone and navigate
 git clone https://github.com/durandom/agentllm
 cd agentllm
 
-# 2. Install dependencies
-uv sync
-
-# 3. Configure environment
+# 2. Configure environment
 cp .env.secrets.template .env.secrets
 # Edit .env.secrets and add your GEMINI_API_KEY (get from https://aistudio.google.com/apikey)
 
-# 4. Start everything (containerized)
-nox -s dev_build  # First time: builds containers
-# nox -s dev      # Subsequent starts: reuses existing images
+# 3. Start everything (easiest way!)
+podman compose up
 ```
 
 **Access Open WebUI:** <http://localhost:3000>
@@ -36,6 +28,8 @@ nox -s dev_build  # First time: builds containers
 **Available Agents:**
 - `agno/release-manager` - RHDH release management assistant
 - `agno/demo-agent` - Example agent with color tools
+
+> **Note:** Agent data (session history, credentials) is stored in the `tmp/` directory, which persists across restarts.
 
 ## Architecture
 
@@ -80,10 +74,14 @@ See [CLAUDE.md](CLAUDE.md) for detailed architecture documentation.
 
 | Mode | Command | Use When | Proxy | OpenWebUI |
 |------|---------|----------|-------|-----------|
-| **Full Container** | `nox -s dev` or `nox -s dev_build` | Just testing agents | Container | Container |
-| **Development** | Terminal 1: `nox -s proxy`<br>Terminal 2: `nox -s dev_local_proxy` | Modifying agent code | Local (hot reload) | Container |
+| **Quick Start** ⭐ | `podman compose up` | **Easiest way** - just running the system | Container | Container |
+| **Full Container** | `nox -s dev` or `nox -s dev_build` | Need to rebuild after code changes | Container | Container |
+| **Development** | Terminal 1: `nox -s proxy`<br>Terminal 2: `nox -s dev_local_proxy` | Modifying agent code (hot reload) | Local (hot reload) | Container |
 
-**Note:** Use `nox -s dev` for quick starts (reuses existing images), or `nox -s dev_build` when you need to rebuild (after code changes).
+**Notes:**
+- `podman compose up` is the simplest way to get started - no Python/uv/nox required!
+- Use `nox -s dev` for quick starts (reuses existing images), or `nox -s dev_build` when you need to rebuild after code changes
+- Agent data is stored in `tmp/` directory and persists across restarts
 
 **Port reference:**
 - Open WebUI: <http://localhost:3000> (external) → container port 8080 (internal)
@@ -98,12 +96,13 @@ nox -s integration                             # Run integration tests (requires
 uv run pytest tests/test_custom_handler.py -v  # Run specific test
 
 # Development
+podman compose up                              # Easiest: start everything (Quick Start)
 nox -s proxy                                   # Start LiteLLM proxy locally
 nox -s dev                                     # Start full containerized stack (no rebuild)
 nox -s dev_build                               # Build and start (forces rebuild)
 nox -s dev_logs                                # View container logs
-nox -s dev_stop                                # Stop containers (preserve data)
-nox -s dev_clean                               # Clean everything (including volumes)
+nox -s dev_stop                                # Stop containers (preserve tmp/ data)
+nox -s dev_clean                               # Clean everything (containers + tmp/ directory)
 
 # Code quality
 nox -s format                                  # Format code
@@ -147,43 +146,68 @@ curl -X GET http://localhost:8890/v1/models \
 
 ## Adding New Agents
 
-See [docs/agents/creating-agents.md](docs/agents/creating-agents.md) for a complete guide. Quick overview:
+See [docs/agents/creating-agents.md](docs/agents/creating-agents.md) for a complete guide. AgentLLM now supports a **plugin-based architecture** with automatic agent discovery.
 
-1. **Create agent file** in `src/agentllm/agents/my_agent.py`:
+### Quick Start (Plugin System - Recommended)
+
+1. **Create configurator** in `src/agentllm/agents/my_agent_configurator.py`:
 
 ```python
-from agno.agent import Agent
-from agno.models.google import Gemini
-from agentllm.agents.release_manager import shared_db
+from agentllm.agents.base import AgentConfigurator, BaseToolkitConfig
 
-def create_my_agent(temperature=None, max_tokens=None, **kwargs):
-    model_params = {"id": "gemini-2.5-flash"}
-    if temperature is not None:
-        model_params["temperature"] = temperature
-    if max_tokens is not None:
-        model_params["max_tokens"] = max_tokens
+class MyAgentConfigurator(AgentConfigurator):
+    def _initialize_toolkit_configs(self) -> list[BaseToolkitConfig]:
+        return []  # Add toolkit configs here
 
-    return Agent(
-        name="my-agent",
-        model=Gemini(**model_params),
-        description="My custom agent",
-        instructions=["Your instructions here"],
-        markdown=True,
-        db=shared_db,                    # Shared session database
-        add_history_to_context=True,     # Enable conversation memory
-        num_history_runs=10,
-        read_chat_history=True,
-    )
+    def _build_agent_instructions(self) -> list[str]:
+        return ["You are my agent.", "Your purpose is..."]
 
-def get_agent(agent_name="my-agent", temperature=None, max_tokens=None, **kwargs):
-    if agent_name != "my-agent":
-        raise KeyError(f"Agent '{agent_name}' not found.")
-    return create_my_agent(temperature, max_tokens, **kwargs)
+    def _get_agent_name(self) -> str:
+        return "my-agent"
+
+    def _get_agent_description(self) -> str:
+        return "My agent description"
 ```
 
-2. **Register agent** in `src/agentllm/custom_handler.py` (import your module)
+2. **Create agent wrapper** in `src/agentllm/agents/my_agent.py`:
 
-3. **Add to proxy config** in `proxy_config.yaml`:
+```python
+from agentllm.agents.base import BaseAgentWrapper, AgentFactory
+from .my_agent_configurator import MyAgentConfigurator
+
+class MyAgent(BaseAgentWrapper):
+    def _create_configurator(self, user_id, session_id, shared_db, **kwargs):
+        return MyAgentConfigurator(
+            user_id=user_id,
+            session_id=session_id,
+            shared_db=shared_db,
+            **kwargs
+        )
+
+class MyAgentFactory(AgentFactory):
+    @staticmethod
+    def create_agent(shared_db, token_storage, user_id, session_id=None,
+                    temperature=None, max_tokens=None, **kwargs):
+        return MyAgent(shared_db=shared_db, user_id=user_id,
+                      session_id=session_id, **kwargs)
+
+    @staticmethod
+    def get_metadata():
+        return {
+            "name": "my-agent",
+            "description": "My agent description",
+            "mode": "chat",
+        }
+```
+
+3. **Register in `pyproject.toml`**:
+
+```toml
+[project.entry-points."agentllm.agents"]
+my-agent = "agentllm.agents.my_agent:MyAgentFactory"
+```
+
+4. **Add to proxy config** in `proxy_config.yaml`:
 
 ```yaml
 - model_name: agno/my-agent
@@ -192,7 +216,7 @@ def get_agent(agent_name="my-agent", temperature=None, max_tokens=None, **kwargs
     custom_llm_provider: agno
 ```
 
-4. **Restart proxy**: `nox -s proxy`
+5. **Restart proxy**: `nox -s proxy` - Your agent will be auto-discovered!
 
 ## Configuration
 
@@ -218,6 +242,23 @@ Edit `proxy_config.yaml` to:
 - Configure authentication
 - Adjust logging and server settings
 
+### Data Storage
+
+AgentLLM stores all agent data in the `tmp/` directory:
+
+```
+tmp/
+├── agno_sessions.db        # Session history and conversation context
+├── agno_credentials.db     # User credentials (OAuth tokens, API keys)
+└── agno_handler.log        # Application logs
+```
+
+**Key Points:**
+- Data persists across container restarts (volume-mounted in `compose.yaml`)
+- Delete `tmp/` to reset all agents and clear credentials
+- Session history is per-user and per-agent
+- Credentials are encrypted and stored securely per-user
+
 ## Key Features
 
 ### LiteLLM Custom Provider
@@ -235,14 +276,20 @@ The Agno provider extends `litellm.CustomLLM` and implements:
 - Conversation context preserved in agent sessions
 - Per-user agent isolation
 
-### Agent Wrapper Pattern
+### Plugin-Based Architecture
 
-Agents use a wrapper pattern (see `ReleaseManager` in `src/agentllm/agents/release_manager.py`):
+AgentLLM uses a **plugin system** with automatic agent discovery:
 
-- **Toolkit Configuration**: OAuth flows for Google Drive, API tokens for Jira
-- **Per-user Isolation**: Separate agents and credentials per user
-- **Configuration Management**: Extract credentials from messages, prompt when missing
-- **Session Memory**: SQLite-backed conversation history
+- **AgentFactory**: Entry point registration via `pyproject.toml`
+- **AgentConfigurator**: Separates configuration management from execution
+- **BaseAgentWrapper**: Provides common execution interface
+- **AgentRegistry**: Automatically discovers and registers agents at runtime
+
+**Benefits:**
+- Agents can be distributed as separate packages
+- No manual imports needed - automatic discovery
+- Clean separation between configuration and execution
+- Metadata system for agent capabilities
 
 ### Streaming Support
 
@@ -269,12 +316,20 @@ agentllm/
 │   ├── custom_handler.py              # LiteLLM CustomLLM implementation
 │   ├── proxy_config.yaml              # LiteLLM proxy configuration
 │   ├── agents/
-│   │   ├── release_manager.py         # ReleaseManager wrapper class
-│   │   ├── demo_agent.py              # Demo agent (example)
+│   │   ├── base/                      # Plugin system base classes
+│   │   │   ├── factory.py             #   AgentFactory ABC
+│   │   │   ├── registry.py            #   AgentRegistry (auto-discovery)
+│   │   │   ├── configurator.py        #   AgentConfigurator (config mgmt)
+│   │   │   ├── wrapper.py             #   BaseAgentWrapper (execution)
+│   │   │   └── toolkit_config.py      #   BaseToolkitConfig (re-export)
+│   │   ├── release_manager.py         # Production agent wrapper
+│   │   ├── release_manager_configurator.py  # Release manager config
+│   │   ├── demo_agent.py              # Demo agent (reference impl)
+│   │   ├── demo_agent_configurator.py # Demo agent config
 │   │   └── toolkit_configs/
-│   │       ├── base.py                # Abstract toolkit config base
 │   │       ├── gdrive_config.py       # Google Drive OAuth
-│   │       └── jira_config.py         # Jira API token
+│   │       ├── jira_config.py         # Jira API token
+│   │       └── favorite_color_config.py  # Demo config
 │   ├── tools/
 │   │   ├── gdrive_toolkit.py          # Google Drive tools
 │   │   ├── jira_toolkit.py            # Jira tools
@@ -291,13 +346,14 @@ agentllm/
 │   └── templates/                     # Documentation templates
 ├── noxfile.py                         # Task automation
 ├── proxy_config.yaml                  # Proxy config (symlink to src/)
-└── CLAUDE.md                          # Architecture & developer guide
+├── AGENTS.md                          # Architecture patterns & developer guide
+└── CLAUDE.md                          # Reference to AGENTS.md
 ```
 
 ## Documentation
 
 - **[Creating Agents](docs/agents/creating-agents.md)** - Complete guide to building custom agents with tools and configuration
-- **[CLAUDE.md](CLAUDE.md)** - Complete architecture and development reference for contributors
+- **[AGENTS.md](AGENTS.md)** - Architecture patterns, plugin system, and developer guide for contributors
 
 ## Troubleshooting
 
@@ -325,6 +381,28 @@ lsof -i :8890
 - Check port mapping: Should see `0.0.0.0:3000->8080/tcp`
 - Try http://localhost:3000 (external port, not 8080)
 - Check container logs: `nox -s dev_logs`
+
+### Reset Agent Data or Clear Credentials
+
+To reset all agent sessions and credentials:
+
+```bash
+# Stop containers first
+podman compose down
+# or
+nox -s dev_stop
+
+# Remove agent data
+rm -rf tmp/
+
+# Restart
+podman compose up
+```
+
+This clears:
+- All conversation history
+- Stored OAuth tokens and API keys
+- Agent session state
 
 ## Contributing
 

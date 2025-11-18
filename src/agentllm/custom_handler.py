@@ -12,8 +12,7 @@ from litellm import CustomLLM
 from litellm.types.utils import Choices, Message, ModelResponse
 from loguru import logger
 
-from agentllm.agents.demo_agent import DemoAgent
-from agentllm.agents.release_manager import ReleaseManager
+from agentllm.agents.base import AgentRegistry
 from agentllm.db import TokenStorage
 from agentllm.utils.logging import safe_log_content
 
@@ -49,6 +48,11 @@ logger.info(f"Initialized shared database at {DB_PATH}")
 # Create token storage using the shared database
 token_storage = TokenStorage(agno_db=shared_db)
 logger.info("Initialized token storage")
+
+# Initialize agent registry and discover plugins
+agent_registry = AgentRegistry()
+agent_registry.discover_agents()
+logger.info(f"Agent registry initialized. Discovered agents: {agent_registry.list_agents()}")
 
 
 class AgnoCustomLLM(CustomLLM):
@@ -184,23 +188,12 @@ class AgnoCustomLLM(CustomLLM):
         if user_id is None:
             logger.warning("user_id is None, using 'unknown' as default")
 
-        # Instantiate the agent class based on agent_name
-        if agent_name == "release-manager":
-            logger.debug("Instantiating ReleaseManager...")
-            agent = ReleaseManager(
-                shared_db=shared_db,
-                token_storage=token_storage,
-                user_id=effective_user_id,
-                session_id=session_id,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
-            logger.debug("ReleaseManager instantiated successfully")
-        elif agent_name == "rhai-roadmap-publisher":
-            logger.debug("Instantiating RHAI Roadmap Publisher...")
-            from agentllm.agents.rhai_roadmap_publisher import RHAIRoadmapPublisher
+        # Get agent from registry (plugin system)
+        factory = agent_registry.get_factory(agent_name)
 
-            agent = RHAIRoadmapPublisher(
+        if factory:
+            logger.debug(f"Creating agent '{agent_name}' via registry factory...")
+            agent = factory.create_agent(
                 shared_db=shared_db,
                 token_storage=token_storage,
                 user_id=effective_user_id,
@@ -208,20 +201,11 @@ class AgnoCustomLLM(CustomLLM):
                 temperature=temperature,
                 max_tokens=max_tokens,
             )
-            logger.debug("RHAI Roadmap Publisher instantiated successfully")
-        elif agent_name == "demo-agent":
-            logger.debug("Instantiating DemoAgent...")
-            agent = DemoAgent(
-                shared_db=shared_db,
-                token_storage=token_storage,
-                user_id=effective_user_id,
-                session_id=session_id,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
-            logger.debug("DemoAgent instantiated successfully")
+            logger.debug(f"Agent '{agent_name}' instantiated successfully via factory")
         else:
-            error_msg = f"Agent '{agent_name}' not found. Available agents: 'release-manager', 'demo-agent'"
+            # Agent not found
+            available_agents = agent_registry.list_agents()
+            error_msg = f"Agent '{agent_name}' not found. Available agents: {', '.join(available_agents)}"
             logger.error(error_msg)
             raise Exception(error_msg)
 

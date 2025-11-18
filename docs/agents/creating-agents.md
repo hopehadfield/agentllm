@@ -13,51 +13,37 @@ This guide walks you through creating custom Agno agents for AgentLLM, from simp
 
 ## Overview
 
-Creating a custom agent involves four main steps:
+Creating a custom agent involves five main steps:
 
-1. **Create the agent class** - Extend `BaseAgentWrapper` and implement abstract methods
-2. **Register with custom handler** - Import class and add instantiation logic in `custom_handler.py`
-3. **Add to proxy config** - Register model in `proxy_config.yaml`
-4. **Test the agent** - Verify via curl or OpenWebUI
+1. **Create the agent configurator** - Extend `AgentConfigurator` and implement configuration logic
+2. **Create the agent wrapper** - Extend `BaseAgentWrapper` and reference the configurator
+3. **Create the agent factory** - Implement `AgentFactory` for plugin system registration
+4. **Register via entry points** - Add entry point in `pyproject.toml` for auto-discovery
+5. **Add to proxy config** - Register model in `proxy_config.yaml`
+6. **Test the agent** - Verify via curl or OpenWebUI (agent will be auto-discovered!)
 
 ### Architecture Pattern
 
-AgentLLM agents follow a **class-based wrapper pattern** that extends `BaseAgentWrapper`:
+AgentLLM agents follow a **configurator + wrapper + factory pattern** with plugin-based discovery:
+
+**1. AgentConfigurator** - Manages configuration and agent building:
 
 ```python
-from agentllm.agents.base_agent import BaseAgentWrapper
-from agentllm.agents.toolkit_configs.base import BaseToolkitConfig
-from agno.db.sqlite import SqliteDb
-from agentllm.db import TokenStorage
+from agentllm.agents.base import AgentConfigurator, BaseToolkitConfig
 
-class MyAgent(BaseAgentWrapper):
-    """My custom agent implementation."""
-
-    def __init__(
-        self,
-        shared_db: SqliteDb,
-        token_storage: TokenStorage,
-        user_id: str,
-        session_id: str | None = None,
-        temperature: float | None = None,
-        max_tokens: int | None = None,
-        **model_kwargs,
-    ):
-        # Call parent constructor (handles common setup)
-        super().__init__(
-            shared_db=shared_db,
-            user_id=user_id,
-            session_id=session_id,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            **model_kwargs,
-        )
-
-    # Implement 4 required abstract methods:
+class MyAgentConfigurator(AgentConfigurator):
+    """Configuration management for MyAgent."""
 
     def _initialize_toolkit_configs(self) -> list[BaseToolkitConfig]:
-        """Return list of toolkit configurations (or empty list)."""
+        """Return list of toolkit configurations."""
         return []  # No toolkits, or [MyToolkitConfig(), ...]
+
+    def _build_agent_instructions(self) -> list[str]:
+        """Return agent instructions/system prompt."""
+        return [
+            "You are my custom agent.",
+            "Your purpose is to...",
+        ]
 
     def _get_agent_name(self) -> str:
         """Return agent identifier (e.g., 'my-agent')."""
@@ -66,87 +52,88 @@ class MyAgent(BaseAgentWrapper):
     def _get_agent_description(self) -> str:
         """Return agent description for users."""
         return "My custom agent for ..."
-
-    def _build_agent_instructions(self, user_id: str) -> list[str]:
-        """Return agent instructions/system prompt."""
-        return [
-            "You are my custom agent.",
-            "Your purpose is to...",
-        ]
 ```
 
-**Why this pattern?**
-- **Separation of concerns**: Base class handles configuration management, streaming, caching
-- **Per-user isolation**: Each wrapper instance is tied to a specific user+session
-- **Dependency injection**: Database and token storage passed explicitly (testable)
-- **Reusable logic**: All agents share common functionality from `BaseAgentWrapper`
-- **Type safety**: Abstract methods enforce implementation contract
-
-## Simple Agent (No Tools)
-
-Let's create a simple creative writing agent with no external tools or configuration requirements.
-
-### Step 1: Create Agent Class
-
-Create `src/agentllm/agents/writer_agent.py`:
+**2. BaseAgentWrapper** - Handles execution:
 
 ```python
-"""Creative writing agent for generating stories and content."""
+from agentllm.agents.base import BaseAgentWrapper
+from .my_agent_configurator import MyAgentConfigurator
 
-from agentllm.agents.base_agent import BaseAgentWrapper
-from agentllm.agents.toolkit_configs.base import BaseToolkitConfig
-from agno.db.sqlite import SqliteDb
-from agentllm.db import TokenStorage
+class MyAgent(BaseAgentWrapper):
+    """My custom agent implementation."""
 
+    def _create_configurator(self, user_id, session_id, shared_db, **kwargs):
+        """Create configurator instance for this agent."""
+        return MyAgentConfigurator(
+            user_id=user_id,
+            session_id=session_id,
+            shared_db=shared_db,
+            **kwargs
+        )
+```
 
-class WriterAgent(BaseAgentWrapper):
-    """Creative writing agent with no tools or required configuration."""
+**3. AgentFactory** - Enables plugin system:
 
-    def __init__(
-        self,
-        shared_db: SqliteDb,
-        token_storage: TokenStorage,
-        user_id: str,
-        session_id: str | None = None,
-        temperature: float | None = None,
-        max_tokens: int | None = None,
-        **model_kwargs,
-    ):
-        """
-        Initialize the Writer Agent.
+```python
+from agentllm.agents.base import AgentFactory
 
-        Args:
-            shared_db: Shared database instance for session management
-            token_storage: Token storage instance for credentials
-            user_id: User identifier
-            session_id: Session identifier (optional)
-            temperature: Model temperature (0.0-2.0)
-            max_tokens: Maximum tokens in response
-            **model_kwargs: Additional model parameters
-        """
-        # Call parent constructor
-        super().__init__(
+class MyAgentFactory(AgentFactory):
+    """Factory for creating MyAgent instances."""
+
+    @staticmethod
+    def create_agent(shared_db, token_storage, user_id, session_id=None,
+                    temperature=None, max_tokens=None, **kwargs):
+        return MyAgent(
             shared_db=shared_db,
             user_id=user_id,
             session_id=session_id,
             temperature=temperature,
             max_tokens=max_tokens,
-            **model_kwargs,
+            **kwargs
         )
+
+    @staticmethod
+    def get_metadata():
+        return {
+            "name": "my-agent",
+            "description": "My custom agent",
+            "mode": "chat",
+            "requires_env": [],  # e.g., ["MY_API_KEY"]
+        }
+```
+
+**Why this pattern?**
+- **Separation of concerns**: Configurator handles config, wrapper handles execution
+- **Plugin architecture**: Auto-discovery via entry points, no manual imports
+- **Per-user isolation**: Each wrapper instance is tied to a specific user+session
+- **Dependency injection**: Database and token storage passed explicitly (testable)
+- **Reusable logic**: All agents share common functionality from base classes
+- **Type safety**: Abstract methods enforce implementation contract
+- **Installable agents**: Agents can be distributed as separate packages
+
+## Simple Agent (No Tools)
+
+Let's create a simple creative writing agent with no external tools or configuration requirements.
+
+### Step 1: Create Agent Configurator
+
+Create `src/agentllm/agents/writer_agent_configurator.py`:
+
+```python
+"""Creative writing agent configurator."""
+
+from agentllm.agents.base import AgentConfigurator, BaseToolkitConfig
+
+
+class WriterAgentConfigurator(AgentConfigurator):
+    """Configuration management for Writer Agent."""
 
     def _initialize_toolkit_configs(self) -> list[BaseToolkitConfig]:
         """No toolkits needed for this simple agent."""
         return []
 
-    def _get_agent_name(self) -> str:
-        """Return agent name."""
-        return "writer-agent"
-
-    def _get_agent_description(self) -> str:
-        """Return agent description."""
-        return "Creative writing assistant for stories, articles, and content"
-
-    def _build_agent_instructions(self, user_id: str) -> list[str]:
+    def _build_agent_instructions(self) -> list[str]:
         """Return agent instructions."""
         return [
             "You are a creative writing assistant.",
@@ -155,71 +142,91 @@ class WriterAgent(BaseAgentWrapper):
             "Suggest plot ideas, character development, and narrative structures.",
             "Adapt your tone and style to match the user's needs.",
         ]
+
+    def _get_agent_name(self) -> str:
+        """Return agent name."""
+        return "writer-agent"
+
+    def _get_agent_description(self) -> str:
+        """Return agent description."""
+        return "Creative writing assistant for stories, articles, and content"
+```
+
+### Step 2: Create Agent Wrapper and Factory
+
+Create `src/agentllm/agents/writer_agent.py`:
+
+```python
+"""Creative writing agent wrapper and factory."""
+
+from agentllm.agents.base import BaseAgentWrapper, AgentFactory
+from .writer_agent_configurator import WriterAgentConfigurator
+
+
+class WriterAgent(BaseAgentWrapper):
+    """Creative writing agent with no tools or required configuration."""
+
+    def _create_configurator(self, user_id, session_id, shared_db, **kwargs):
+        """Create Writer Agent configurator instance."""
+        return WriterAgentConfigurator(
+            user_id=user_id,
+            session_id=session_id,
+            shared_db=shared_db,
+            **kwargs
+        )
+
+
+class WriterAgentFactory(AgentFactory):
+    """Factory for creating Writer Agent instances."""
+
+    @staticmethod
+    def create_agent(shared_db, token_storage, user_id, session_id=None,
+                    temperature=None, max_tokens=None, **kwargs):
+        """Create a Writer Agent instance."""
+        return WriterAgent(
+            shared_db=shared_db,
+            user_id=user_id,
+            session_id=session_id,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            **kwargs
+        )
+
+    @staticmethod
+    def get_metadata():
+        """Get agent metadata."""
+        return {
+            "name": "writer-agent",
+            "description": "Creative writing assistant",
+            "mode": "chat",
+            "requires_env": [],
+        }
 ```
 
 **Key Points:**
-- Extends `BaseAgentWrapper` to inherit common functionality
-- No toolkits (returns empty list from `_initialize_toolkit_configs()`)
-- Simple instructions for creative writing tasks
-- All parameter handling is done by base class
+- Configurator handles all agent configuration logic
+- Wrapper just delegates to configurator via `_create_configurator()`
+- Factory enables plugin system with metadata
+- No toolkits needed (empty list from configurator)
+- All parameter handling is done by base classes
 
-### Step 2: Register with Custom Handler
+### Step 3: Register via Entry Points
 
-Edit `src/agentllm/custom_handler.py`:
+Edit `pyproject.toml` to register the agent for auto-discovery:
 
-**Add import at the top:**
-```python
-from agentllm.agents.writer_agent import WriterAgent
-```
-
-**Add instantiation logic in `_get_agent_instance()` method:**
-```python
-def _get_agent_instance(self, model: str, ...) -> BaseAgentWrapper:
-    """Get or create agent wrapper instance."""
-
-    # Extract agent name and parameters...
-
-    # Instantiate appropriate agent class
-    if agent_name == "release-manager":
-        agent = ReleaseManager(
-            shared_db=shared_db,
-            token_storage=token_storage,
-            user_id=effective_user_id,
-            session_id=session_id,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-    elif agent_name == "demo-agent":
-        agent = DemoAgent(
-            shared_db=shared_db,
-            token_storage=token_storage,
-            user_id=effective_user_id,
-            session_id=session_id,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-    elif agent_name == "writer-agent":  # Add this block
-        agent = WriterAgent(
-            shared_db=shared_db,
-            token_storage=token_storage,
-            user_id=effective_user_id,
-            session_id=session_id,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
-    else:
-        error_msg = f"Agent '{agent_name}' not found. Available agents: 'release-manager', 'demo-agent', 'writer-agent'"
-        raise ValueError(error_msg)
-
-    return agent
+```toml
+[project.entry-points."agentllm.agents"]
+# ... existing agents ...
+writer-agent = "agentllm.agents.writer_agent:WriterAgentFactory"
 ```
 
 **Key Points:**
-- Import the class directly (not as a module)
-- Instantiate with all required parameters (dependency injection)
-- The wrapper instance is cached by custom_handler per (user_id, session_id, model, temperature, max_tokens)
+- Entry point name (`writer-agent`) should match the agent name returned by `_get_agent_name()`
+- Points to the factory class, not the wrapper
+- No imports needed in `custom_handler.py` - automatic discovery!
+- The factory is loaded and registered at runtime by `AgentRegistry`
 
-### Step 3: Add to Proxy Config
+### Step 4: Add to Proxy Config
 
 Edit `proxy_config.yaml` and add model entry:
 
@@ -234,7 +241,7 @@ model_list:
       custom_llm_provider: agno
 ```
 
-### Step 4: Test the Agent
+### Step 5: Test the Agent
 
 ```bash
 # Restart proxy
@@ -350,53 +357,42 @@ class WeatherTools(Toolkit):
             return f"Error fetching forecast: {str(e)}"
 ```
 
-**Step 2: Create Agent Class with Tools**
+**Step 2: Create Configurator with Tools**
 
-Create `src/agentllm/agents/weather_agent.py`:
+Create `src/agentllm/agents/weather_agent_configurator.py`:
 
 ```python
-"""Weather agent with API tools."""
+"""Weather agent configurator with tools."""
 
 import os
-from agentllm.agents.base_agent import BaseAgentWrapper
-from agentllm.agents.toolkit_configs.base import BaseToolkitConfig
-from agno.db.sqlite import SqliteDb
-from agentllm.db import TokenStorage
+from agentllm.agents.base import AgentConfigurator, BaseToolkitConfig
 from agentllm.tools.weather_toolkit import WeatherTools
 
 
-class WeatherAgent(BaseAgentWrapper):
-    """Weather agent with API tools."""
+class WeatherAgentConfigurator(AgentConfigurator):
+    """Configuration management for Weather Agent."""
 
-    def __init__(
-        self,
-        shared_db: SqliteDb,
-        token_storage: TokenStorage,
-        user_id: str,
-        session_id: str | None = None,
-        temperature: float | None = None,
-        max_tokens: int | None = None,
-        **model_kwargs,
-    ):
-        """Initialize Weather Agent."""
+    def __init__(self, *args, **kwargs):
+        """Initialize Weather Agent configurator."""
         # Get API key from environment
         self.api_key = os.getenv("OPENWEATHER_API_KEY")
         if not self.api_key:
             raise ValueError("OPENWEATHER_API_KEY environment variable not set")
 
-        # Call parent constructor
-        super().__init__(
-            shared_db=shared_db,
-            user_id=user_id,
-            session_id=session_id,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            **model_kwargs,
-        )
+        super().__init__(*args, **kwargs)
 
     def _initialize_toolkit_configs(self) -> list[BaseToolkitConfig]:
         """No user configuration needed - using shared API key."""
         return []
+
+    def _build_agent_instructions(self) -> list[str]:
+        """Return agent instructions."""
+        return [
+            "You are a weather assistant.",
+            "Use the weather tools to provide current weather and forecasts.",
+            "Always specify the city clearly when using tools.",
+            "Provide helpful context and recommendations based on weather.",
+        ]
 
     def _get_agent_name(self) -> str:
         """Return agent name."""
@@ -406,35 +402,87 @@ class WeatherAgent(BaseAgentWrapper):
         """Return agent description."""
         return "Weather assistant with real-time weather data"
 
-    def _build_agent_instructions(self, user_id: str) -> list[str]:
-        """Return agent instructions."""
-        return [
-            "You are a weather assistant.",
-            "Use the weather tools to provide current weather and forecasts.",
-            "Always specify the city clearly when using tools.",
-            "Provide helpful context and recommendations based on weather.",
-        ]
-
-    def _collect_toolkits(self, user_id: str) -> list:
+    def _collect_toolkits(self) -> list:
         """Return tools for this agent (shared API key, no per-user config)."""
+        # Override to provide toolkits directly (not from toolkit configs)
         return [WeatherTools(api_key=self.api_key)]
 ```
 
-**Step 3: Configure Environment**
+**Step 3: Create Agent Wrapper and Factory**
+
+Create `src/agentllm/agents/weather_agent.py`:
+
+```python
+"""Weather agent wrapper and factory."""
+
+from agentllm.agents.base import BaseAgentWrapper, AgentFactory
+from .weather_agent_configurator import WeatherAgentConfigurator
+
+
+class WeatherAgent(BaseAgentWrapper):
+    """Weather agent with API tools."""
+
+    def _create_configurator(self, user_id, session_id, shared_db, **kwargs):
+        """Create Weather Agent configurator instance."""
+        return WeatherAgentConfigurator(
+            user_id=user_id,
+            session_id=session_id,
+            shared_db=shared_db,
+            **kwargs
+        )
+
+
+class WeatherAgentFactory(AgentFactory):
+    """Factory for creating Weather Agent instances."""
+
+    @staticmethod
+    def create_agent(shared_db, token_storage, user_id, session_id=None,
+                    temperature=None, max_tokens=None, **kwargs):
+        """Create a Weather Agent instance."""
+        return WeatherAgent(
+            shared_db=shared_db,
+            user_id=user_id,
+            session_id=session_id,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            **kwargs
+        )
+
+    @staticmethod
+    def get_metadata():
+        """Get agent metadata."""
+        return {
+            "name": "weather-agent",
+            "description": "Weather assistant with real-time data",
+            "mode": "chat",
+            "requires_env": ["OPENWEATHER_API_KEY"],
+        }
+```
+
+**Step 4: Configure Environment**
 
 Add to `.env.secrets`:
 ```bash
 OPENWEATHER_API_KEY=your_api_key_here
 ```
 
-**Step 4: Register and Test**
+**Step 5: Register via Entry Points**
 
-Register in `custom_handler.py` as shown in the simple agent example, then test via curl or OpenWebUI.
+Edit `pyproject.toml`:
+```toml
+[project.entry-points."agentllm.agents"]
+weather-agent = "agentllm.agents.weather_agent:WeatherAgentFactory"
+```
+
+**Step 6: Add to Proxy Config and Test**
+
+Add to `proxy_config.yaml`, then test via curl or OpenWebUI.
 
 **Key Points:**
-- Tools are created by overriding `_collect_toolkits()` method (called by base class when building agent)
-- For shared services (no per-user credentials): Override `_collect_toolkits()` to return toolkit instances directly
+- Configurator can override `_collect_toolkits()` to provide tools directly
+- For shared services (no per-user credentials): Override `_collect_toolkits()` in configurator
 - For per-user credentials (OAuth, API tokens): Use toolkit configs (see next section)
+- Tools are instantiated once in configurator `__init__()` and reused
 
 ## Agent with Configuration
 
@@ -459,14 +507,15 @@ The **Demo Agent** (`src/agentllm/agents/demo_agent.py`) is the reference implem
 
 **Key Code Patterns:**
 
+**Configurator** (handles configuration):
 ```python
-class DemoAgent(BaseAgentWrapper):
-    """Agent with required configuration."""
+class DemoAgentConfigurator(AgentConfigurator):
+    """Configuration management for Demo Agent."""
 
-    def __init__(self, shared_db, token_storage, user_id, session_id=None, ...):
-        # Store token_storage for toolkit config
+    def __init__(self, user_id, session_id, shared_db, token_storage, ...):
+        # Store token_storage for use in toolkit configs
         self._token_storage = token_storage
-        super().__init__(...)
+        super().__init__(user_id, session_id, shared_db, ...)
 
     def _initialize_toolkit_configs(self) -> list[BaseToolkitConfig]:
         """Register toolkit configurations."""
@@ -477,14 +526,37 @@ class DemoAgent(BaseAgentWrapper):
     # ... other abstract methods ...
 ```
 
+**Wrapper** (handles execution):
+```python
+class DemoAgent(BaseAgentWrapper):
+    """Demo agent with required configuration."""
+
+    def __init__(self, shared_db, token_storage, user_id, session_id=None, ...):
+        # Store token_storage to pass to configurator
+        self._token_storage = token_storage
+        super().__init__(shared_db, user_id, session_id, ...)
+
+    def _create_configurator(self, user_id, session_id, shared_db, **kwargs):
+        """Create configurator with token_storage."""
+        return DemoAgentConfigurator(
+            user_id=user_id,
+            session_id=session_id,
+            shared_db=shared_db,
+            token_storage=self._token_storage,  # Pass token_storage
+            **kwargs
+        )
+```
+
 **How Configuration Works:**
 
-1. **First message**: Agent checks if `FavoriteColorConfig.is_configured(user_id)` returns True
-2. **If not configured**: Agent returns prompt from `get_config_prompt()`
+1. **First message**: Configurator's `handle_configuration()` checks if `FavoriteColorConfig.is_configured(user_id)` returns True
+2. **If not configured**: Configurator returns prompt from `get_config_prompt()`
 3. **User sends config**: "My favorite color is blue"
-4. **Extraction**: `extract_and_store_config()` extracts "blue" and stores it
-5. **Toolkit creation**: `get_toolkit(user_id)` returns `ColorTools` configured with "blue"
-6. **Agent continues**: Now that config is complete, agent can assist user
+4. **Extraction**: Configurator's `handle_configuration()` calls `extract_and_store_config()`, which extracts "blue" and stores it
+5. **Toolkit creation**: Configurator's `build_agent()` calls `get_toolkit(user_id)` to get `ColorTools` configured with "blue"
+6. **Agent continues**: Now that config is complete, wrapper executes the agent
+
+**Key Benefit:** Configuration logic is cleanly separated in the configurator - the wrapper just delegates!
 
 ### Creating Your Own Toolkit Config
 
@@ -617,28 +689,27 @@ instructions=[
 
 ### Parameter Handling
 
-`BaseAgentWrapper` automatically handles parameter pass-through. Parameters from the API request (temperature, max_tokens) are:
+Parameters flow from API request → wrapper → configurator → Agno Agent:
 
 1. Passed to your agent wrapper's `__init__()`
-2. Stored by base class in `self._temperature`, `self._max_tokens`, `self._model_kwargs`
-3. Automatically applied when creating the Agno Agent instance
+2. Wrapper passes them to configurator via `_create_configurator()`
+3. Configurator stores and applies them when building the agent
 
-**Your responsibility:** Just pass them to `super().__init__()`:
+**Your responsibility:** Just pass them through:
 
 ```python
 class MyAgent(BaseAgentWrapper):
-    def __init__(self, shared_db, token_storage, user_id, session_id=None,
-                 temperature=None, max_tokens=None, **model_kwargs):
-        # Just pass to parent - it handles everything
-        super().__init__(
-            shared_db=shared_db,
+    def _create_configurator(self, user_id, session_id, shared_db, **kwargs):
+        # kwargs includes temperature, max_tokens, model_kwargs
+        return MyAgentConfigurator(
             user_id=user_id,
             session_id=session_id,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            **model_kwargs,
+            shared_db=shared_db,
+            **kwargs  # Passes temperature, max_tokens, etc.
         )
 ```
+
+The configurator automatically applies these parameters when creating the Agno Agent instance.
 
 **API usage example:**
 ```bash
@@ -719,9 +790,10 @@ agent = MyAgent(shared_db=shared_db, ...)  # Injected here
 Study these reference implementations:
 
 - **Simple agent**: See `writer-agent` example above
-- **Agent with tools**: `src/agentllm/agents/demo_agent.py` (lines 1-588)
-- **Agent with configuration**: `src/agentllm/agents/release_manager.py` (lines 1-698)
+- **Agent with tools + config**: `src/agentllm/agents/demo_agent.py` and `src/agentllm/agents/demo_agent_configurator.py`
+- **Production agent**: `src/agentllm/agents/release_manager.py` and `src/agentllm/agents/release_manager_configurator.py`
 - **Toolkit config**: `src/agentllm/agents/toolkit_configs/favorite_color_config.py`
+- **Base classes**: `src/agentllm/agents/base/` directory
 
 ## Troubleshooting
 
@@ -730,9 +802,11 @@ Study these reference implementations:
 **Error:** `Unknown agent model: agno/my-agent`
 
 **Solution:**
-1. Check import in `custom_handler.py`
-2. Verify entry in `_get_agent_module()` dictionary
-3. Restart proxy: `nox -s dev_stop && nox -s proxy`
+1. Verify entry point registration in `pyproject.toml`
+2. Check that factory class exists and is correctly named
+3. Ensure factory implements `AgentFactory` interface
+4. Restart proxy: `nox -s dev_stop && nox -s proxy`
+5. Check logs for plugin discovery errors
 
 ### Tools Not Working
 
@@ -756,7 +830,9 @@ uv pip install -e .
 ## Next Steps
 
 - **[Demo Agent Source](../../src/agentllm/agents/demo_agent.py)** - Complete reference implementation with extensive comments
-- **[CLAUDE.md](../../CLAUDE.md)** - Deep dive into architecture and design decisions
+- **[Demo Agent Configurator](../../src/agentllm/agents/demo_agent_configurator.py)** - Example configurator implementation
+- **[AGENTS.md](../../AGENTS.md)** - Architecture patterns, plugin system, and developer guide
+- **[Base Classes](../../src/agentllm/agents/base/)** - Plugin system base classes
 - **[.env.secrets.template](../../.env.secrets.template)** - All available configuration options
 
 Happy agent building! 🤖
