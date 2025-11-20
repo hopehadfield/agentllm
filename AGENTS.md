@@ -286,6 +286,60 @@ Agent provides scored PR list with detailed breakdown, emoji indicators (🔴 Cr
 - `suggest_next_review(repo, reviewer)` - Smart recommendation with reasoning
 - `get_repo_velocity(repo, days)` - Repository merge velocity metrics (all authors)
 
+### Backstage Contributor (`agno/backstage-contributor`)
+
+**Purpose**: Upstream contribution helper for Backstage repositories.
+
+**Setup**:
+1. **Optional: External System Prompt** (recommended for team-specific guidance):
+   - Create a Google Doc with extended instructions (examples, FAQs, current processes)
+   - Set environment variable: `BACKSTAGE_CONTRIBUTOR_SYSTEM_PROMPT_GDRIVE_URL=https://docs.google.com/document/d/YOUR_DOC_ID/edit`
+   - In chat: "My Google Drive credentials are YOUR_OAUTH_JSON"
+   - Agent will fetch and merge instructions from the doc automatically
+2. **Without Google Doc**: Agent works immediately with built-in instructions
+
+**Usage Examples**:
+- "How do I contribute to Backstage?"
+- "What's the plugin structure for community-plugins?"
+- "How do I create a changeset?"
+- "Show me PR requirements for backstage/backstage"
+- "Where can I find good first issues?"
+- "Help me set up my development environment for community-plugins"
+
+**Key Features**:
+- **Contribution Guidelines**: Detailed guides for both backstage/backstage and backstage/community-plugins
+- **Repository Structure**: Validates plugin structure and workspace organization
+- **PR Requirements**: Checks changesets, tests, and linting requirements
+- **Development Setup**: Step-by-step local environment setup
+- **Issue Discovery**: Helps find good first issues and appropriate tasks
+
+**Repositories Covered**:
+- **backstage/backstage**: Core Backstage framework
+- **backstage/community-plugins**: Community-maintained plugins
+
+**Common Topics**:
+- CLA signing requirements
+- Changeset creation (`yarn changeset`)
+- Plugin structure validation
+- Test and linting requirements
+- Development environment setup
+- Good first issue discovery
+- PR submission process
+
+**Implementation Details**:
+- Toolkit: `BackstageToolkit` (`src/agentllm/tools/backstage_toolkit.py`)
+- Configuration: `BackstageConfig` (`src/agentllm/agents/toolkit_configs/backstage_config.py`)
+- Agent: `BackstageContributorAgent` (`src/agentllm/agents/backstage_contributor_agent.py`)
+- Optional: Google Drive for external system prompts (env: `BACKSTAGE_CONTRIBUTOR_SYSTEM_PROMPT_GDRIVE_URL`)
+- No authentication required for core toolkit (public repository guidance)
+
+**Tools Available**:
+- `get_contribution_guide(repo)` - Get detailed contribution guidelines
+- `check_repo_structure(plugin_name, repo)` - Validate plugin structure
+- `validate_pr_requirements(has_changeset, has_tests, passes_lint, repo)` - Check PR readiness
+- `get_development_setup(repo)` - Get development environment setup instructions
+- `find_good_first_issues(repo)` - Find good first issues and resources
+
 ## Key Files
 
 ```
@@ -311,8 +365,12 @@ src/agentllm/
 ## Environment
 
 ```bash
-GEMINI_API_KEY=...                 # Required
-LITELLM_MASTER_KEY=...             # Proxy auth (default: sk-agno-test-key-12345)
+GEMINI_API_KEY=...                                        # Required
+LITELLM_MASTER_KEY=...                                    # Proxy auth (default: sk-agno-test-key-12345)
+
+# Optional: External system prompts (Google Docs)
+RELEASE_MANAGER_SYSTEM_PROMPT_GDRIVE_URL=...             # Release Manager external instructions
+BACKSTAGE_CONTRIBUTOR_SYSTEM_PROMPT_GDRIVE_URL=...       # Backstage Contributor external instructions
 ```
 
 See `.env.secrets.template` for full config.

@@ -17,7 +17,12 @@ class SystemPromptExtensionConfig(BaseToolkitConfig):
     """Configuration manager for extending agent system prompts from Google Drive documents.
 
     This config fetches extended system instructions from a Google Drive document
-    specified by the RELEASE_MANAGER_SYSTEM_PROMPT_GDRIVE_URL environment variable.
+    specified by an environment variable (configurable per agent).
+
+    Environment Variables (agent-specific):
+        - RELEASE_MANAGER_SYSTEM_PROMPT_GDRIVE_URL (default if not specified)
+        - BACKSTAGE_CONTRIBUTOR_SYSTEM_PROMPT_GDRIVE_URL
+        - Or any custom env var passed to __init__
 
     Dependencies:
         - Requires GoogleDriveConfig to be configured for the user
@@ -35,23 +40,26 @@ class SystemPromptExtensionConfig(BaseToolkitConfig):
         self,
         gdrive_config: "GoogleDriveConfig",
         token_storage: "TokenStorage | None" = None,
+        env_var_name: str = "RELEASE_MANAGER_SYSTEM_PROMPT_GDRIVE_URL",
     ):
         """Initialize system prompt extension configuration.
 
         Args:
             gdrive_config: GoogleDriveConfig instance to use for fetching documents
             token_storage: Optional shared token storage (for consistency with base class)
+            env_var_name: Environment variable name containing the Google Doc URL (default: RELEASE_MANAGER_SYSTEM_PROMPT_GDRIVE_URL)
         """
         super().__init__(token_storage)
         self._gdrive_config = gdrive_config
-        self._doc_url = os.getenv("RELEASE_MANAGER_SYSTEM_PROMPT_GDRIVE_URL")
+        self._env_var_name = env_var_name
+        self._doc_url = os.getenv(env_var_name)
         # Per-user cache of fetched system prompts
         self._system_prompts: dict[str, str] = {}
 
         if self._doc_url:
-            logger.info(f"System prompt extension configured with document: {self._doc_url}")
+            logger.info(f"System prompt extension configured with document: {self._doc_url} (from {env_var_name})")
         else:
-            logger.debug("System prompt extension not configured (RELEASE_MANAGER_SYSTEM_PROMPT_GDRIVE_URL not set)")
+            logger.debug(f"System prompt extension not configured ({env_var_name} not set)")
 
     def is_configured(self, user_id: str) -> bool:
         """Check if system prompt extension is fully configured for a user.
